@@ -1,0 +1,39 @@
+import de.fabmax.kool.UnCommentTask
+
+plugins {
+    id("kool.androidlib-conventions") apply false
+    id("kool.lib-conventions") apply false
+    id("kool.publish-conventions") apply false
+    alias(libs.plugins.compose.compiler) apply false
+}
+
+allprojects {
+    group = "de.fabmax.kool"
+    version = "0.20.0-SNAPSHOT"
+}
+
+tasks.register<UnCommentTask>("disableAndroidPlatform") {
+    group = "build setup"
+
+    filesToUpdate += rootProject.file("buildSrc/src/main/kotlin/kool.androidlib-conventions.gradle.kts")
+    listOf("kool-core", "kool-physics", "kool-physics-2d", "kool-editor-model").forEach { subProj ->
+        filesToUpdate += project.file("${subProj}/build.gradle.kts")
+    }
+
+    commentLines += "alias(libs.plugins.androidLibrary)"
+    commentLines += "id(\"com.android.kotlin.multiplatform.library\")"
+    commentBlocks += "android"
+}
+
+tasks.register<UnCommentTask>("enableAndroidPlatform") {
+    group = "build setup"
+
+    filesToUpdate += rootProject.file("buildSrc/src/main/kotlin/kool.androidlib-conventions.gradle.kts")
+    listOf("kool-core", "kool-physics", "kool-physics-2d", "kool-editor-model").forEach { subProj ->
+        filesToUpdate += project.file("${subProj}/build.gradle.kts")
+    }
+
+    uncommentLines += "alias(libs.plugins.androidLibrary)"
+    uncommentLines += "id(\"com.android.kotlin.multiplatform.library\")"
+    uncommentBlocks += "android"
+}

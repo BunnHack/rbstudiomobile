@@ -1,0 +1,220 @@
+package de.fabmax.kool
+
+import de.fabmax.kool.math.Vec2f
+import de.fabmax.kool.math.Vec2i
+import de.fabmax.kool.util.BufferedList
+import de.fabmax.kool.util.WindowTitleHoverHandler
+import de.fabmax.kool.util.logW
+
+interface KoolWindow {
+    /**
+     * OS-level screen scale - typically 1.0 (100%) for traditional 96 dpi low-res displays and > 1.0 for
+     * hidpi / retina displays. By default, the parent screen scale is applied to UI elements.
+     */
+    val parentScreenScale: Float
+
+    /**
+     * Window position in scaled screen space (i.e., considering [parentScreenScale]).
+     */
+    val positionOnScreen: Vec2i
+
+    /**
+     * Window size in scaled screen space (i.e., considering [parentScreenScale]). For example, a full-screen
+     * window on a 4k screen with 150% scale has a `screenSize` of `(3840, 2160) / 1.5 = (2560, 1440)`
+     */
+    val sizeOnScreen: Vec2i
+
+    /**
+     * User-settable render resolution factor. Default value 1.0. Can be set to values < 1 to save performance
+     * at the cost of more pixelated output. Does not affect the size of UI elements.
+     */
+    var renderResolutionFactor: Float
+
+    /**
+     * Physical size of this window in pixels.
+     */
+    val framebufferSize: Vec2i
+
+    /**
+     * Final output surface size in pixels considering all scaling factors.
+     */
+    val size: Vec2i
+
+    /**
+     * Final scale that needs to be applied to UI elements to match the parent screen scale considering the
+     * [renderResolutionFactor].
+     */
+    val renderScale: Float
+
+    var title: String
+    val flags: WindowFlags
+
+    val capabilities: WindowCapabilities
+
+    val resizeListeners: BufferedList<WindowResizeListener>
+    val scaleChangeListeners: BufferedList<ScaleChangeListener>
+    val flagListeners: BufferedList<WindowFlagsListener>
+    val closeListeners: BufferedList<WindowCloseListener>
+    val dragAndDropListeners: BufferedList<DragAndDropListener>
+
+    var windowTitleHoverHandler: WindowTitleHoverHandler
+
+    /**
+     * Request setting the window size in scaled screen space. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window size can take some time and [sizeOnScreen] therefore might
+     * not immediately reflect the new size.
+     */
+    fun setSizeOnScreen(size: Vec2i) { logW { "setSizeOnScreen() not supported by this window implementation" } }
+
+    /**
+     * Request setting the window position in scaled screen space. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window position can take some time and [positionOnScreen] therefore
+     * might not immediately reflect the new size.
+     */
+    fun setPositionOnScreen(pos: Vec2i) { logW { "setPositionOnScreen() not supported by this window implementation" } }
+
+    /**
+     * Request fullscreen mode. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun setFullscreen(flag: Boolean) { logW { "setFullscreen() not supported by this window implementation" } }
+
+    /**
+     * Request maximizing the window. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun setMaximized(flag: Boolean) { logW { "setMaximized() not supported by this window implementation" } }
+
+    /**
+     * Request minimizing the window. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun setMinimized(flag: Boolean) { logW { "setMinimized() not supported by this window implementation" } }
+
+    /**
+     * Request setting window visibility. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun setVisible(flag: Boolean) { logW { "setVisible() not supported by this window implementation" } }
+
+    /**
+     * Request setting title bar visibility. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun setTitleBarVisibility(flag: Boolean) { logW { "setTitleBarVisibility() not supported by this window implementation" } }
+
+    /**
+     * Request OS-level window focus. Might not be supported by all window implementations.
+     * Depending on the implementation, setting the window flags can take some time and [flags] therefore
+     * might not immediately reflect the new state.
+     */
+    fun requestFocus() { logW { "requestFocus() not supported by this window implementation" } }
+
+    fun close()
+}
+
+data class WindowCapabilities(
+    val canSetSize: Boolean,
+    val canSetPosition: Boolean,
+    val canSetFullscreen: Boolean,
+    val canMaximize: Boolean,
+    val canMinimize: Boolean,
+    val canSetVisibility: Boolean,
+    val canSetTitle: Boolean,
+    val canHideTitleBar: Boolean,
+) {
+    companion object {
+        val NONE = WindowCapabilities(
+            canSetSize = false,
+            canSetPosition = false,
+            canSetFullscreen = false,
+            canMaximize = false,
+            canMinimize = false,
+            canSetVisibility = false,
+            canSetTitle = false,
+            canHideTitleBar = false,
+        )
+    }
+}
+
+data class WindowFlags(
+    val isFullscreen: Boolean = false,
+    val isMaximized: Boolean = false,
+    val isMinimized: Boolean = false,
+    val isVisible: Boolean = false,
+    val isOccluded: Boolean = false,
+    val isFocused: Boolean = false,
+    val isHiddenTitleBar: Boolean = false,
+)
+
+fun interface WindowResizeListener {
+    fun onResize(newSize: Vec2i)
+}
+
+fun interface ScaleChangeListener {
+    /**
+     * Called when the screen scale changes, e.g., because the window is moved onto another monitor with a different
+     * scale.
+     */
+    fun onScaleChanged(newScale: Float)
+}
+
+fun interface WindowFlagsListener {
+    fun onFlagsChanged(oldFlags: WindowFlags, newFlags: WindowFlags)
+}
+
+fun interface WindowFlagListener {
+    fun onFlagChanged(newFlags: WindowFlags)
+}
+
+fun interface WindowCloseListener {
+    /**
+     * Called when the app (window / browser tab) is about to close. Can return true to proceed with closing the app
+     * or false to stop it.
+     * This is particular useful to implement a dialogs like "There is unsaved stuff, are you sure you want to close
+     * this app? Yes / no / maybe".
+     */
+    fun onCloseRequest(): Boolean
+}
+
+interface DragAndDropListener {
+    /**
+     * Called when the user drags (and drops) files into the app window. Ideally, we also would want to have callbacks
+     * containing the drag and drop state (e.g., cursor position) before files are dropped, but this is currently not
+     * possible due to limited drag and drop support of GLFW on JVM.
+     */
+    fun onFileDrop(droppedFiles: List<LoadableFile>, position: Vec2f) { }
+
+    fun onTextDrop(text: String, position: Vec2f) { }
+
+    fun onDropCursorPos(position: Vec2f) { }
+}
+
+fun KoolWindow.onResize(listener: WindowResizeListener) {
+    resizeListeners.stageAdd(listener)
+}
+
+fun KoolWindow.onScaleChange(listener: ScaleChangeListener) {
+    scaleChangeListeners.stageAdd(listener)
+}
+
+fun KoolWindow.onWindowCloseRequest(listener: WindowCloseListener) {
+    closeListeners.stageAdd(listener)
+}
+
+fun KoolWindow.onWindowFlagsChanged(listener: WindowFlagsListener) {
+    flagListeners.stageAdd(listener)
+}
+
+fun KoolWindow.onWindowFocusChanged(listener: WindowFlagListener) {
+    flagListeners += WindowFlagsListener { oldFlags, newFlags ->
+        if (oldFlags.isFocused != newFlags.isFocused) {
+            listener.onFlagChanged(newFlags)
+        }
+    }
+}

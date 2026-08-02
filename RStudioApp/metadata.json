@@ -1,0 +1,6 @@
+{
+  "name": "Roblox Studio",
+  "description": "A Material Design 3 clone of Roblox Studio with 3D canvas viewport, orbit camera, parts spawning, properties inspector, and physics script simulations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

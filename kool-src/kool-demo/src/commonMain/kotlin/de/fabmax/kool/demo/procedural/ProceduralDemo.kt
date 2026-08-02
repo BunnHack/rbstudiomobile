@@ -1,0 +1,121 @@
+package de.fabmax.kool.demo.procedural
+
+import de.fabmax.kool.KoolContext
+import de.fabmax.kool.demo.*
+import de.fabmax.kool.demo.menu.DemoMenu
+import de.fabmax.kool.math.Vec3f
+import de.fabmax.kool.math.randomI
+import de.fabmax.kool.math.spatial.BoundingBoxF
+import de.fabmax.kool.modules.ksl.toConfig
+import de.fabmax.kool.modules.ui2.*
+import de.fabmax.kool.pipeline.ao.AoRadius
+import de.fabmax.kool.pipeline.deferred2.Deferred2Pipeline
+import de.fabmax.kool.pipeline.deferred2.defaultOutputQuad
+import de.fabmax.kool.pipeline.deferred2.installBloomPass
+import de.fabmax.kool.scene.Node
+import de.fabmax.kool.scene.Scene
+import de.fabmax.kool.scene.orbitCamera
+import de.fabmax.kool.util.*
+
+class ProceduralDemo : DemoScene("Procedural Geometry") {
+    private val isAutoRotate = mutableStateOf(true)
+    private val isReplaceRose = mutableStateOf(true)
+    private val seedText = mutableStateOf("")
+    private val randomSeedText = mutableStateOf("${randomI()}")
+    private lateinit var roses: Roses
+
+    private val ibl by hdriImage("${DemoLoader.hdriPath}/syferfontein_0d_clear_1k.rgbe.png")
+
+    val tableColor by texture2d("${DemoLoader.materialPath}/granitesmooth1/granitesmooth1-albedo4.jpg")
+    val tableNormal by texture2d("${DemoLoader.materialPath}/granitesmooth1/granitesmooth1-normal2.jpg")
+    val tableRoughness by texture2d("${DemoLoader.materialPath}/granitesmooth1/granitesmooth1-roughness3.jpg")
+
+    override fun Scene.setupMainScene(ctx: KoolContext) {
+        orbitCamera {
+            setRotation(-20f, -10f)
+            setTranslation(0f, 16f, 0f)
+            setZoom(40.0)
+
+            onUpdate += {
+                if (isAutoRotate.value) {
+                    verticalRotation += 5f * Time.deltaT
+                }
+            }
+        }
+
+        lighting.singleDirectionalLight {
+            setup(Vec3f(-1f, -0.3f, -1f))
+            setColor(MdColor.AMBER.mix(Color.WHITE, 0.5f).toLinear(), 3f)
+        }
+
+        val shadowMap = SimpleShadowMap(this@setupMainScene, lighting.lights[0]).apply {
+            setDefaultDepthOffset(true)
+            shadowBounds = BoundingBoxF(Vec3f(-30f, 0f, -30f), Vec3f(30f, 60f, 30f))
+        }
+        val content = Node()
+        val pipeline = Deferred2Pipeline(
+            content = content,
+            scene = this,
+            ibl = ibl,
+            camera = camera,
+            lighting = lighting,
+            shadowMapConfig = listOf(shadowMap).toConfig(),
+            renderScale = 1f / UiScale.windowScale.value
+        )
+        pipeline.enableScreenSpaceReflections()
+        pipeline.aoPass.radius = AoRadius.absoluteRadius(0.6f)
+        val bloom = pipeline.installBloomPass()
+
+        content.apply {
+            addNode(Glass(ibl, shadowMap).apply { pipeline.onSwap { swapBuffers(pipeline) } })
+            addNode(Vase())
+            addNode(Table(this@ProceduralDemo))
+            roses = Roses()
+            addNode(roses)
+        }
+
+        addNode(pipeline.defaultOutputQuad(bloom))
+    }
+
+    override fun createMenu(menu: DemoMenu, ctx: KoolContext) = menuSurface {
+        MenuRow {
+            Text("Seed".l) { labelStyle() }
+            TextField(seedText.use()) {
+                modifier
+                    .width(Grow.Std)
+                    .margin(start = sizes.largeGap)
+                    .alignY(AlignmentY.Center)
+                    .hint(randomSeedText.use())
+                    .onChange { seedText.set(it) }
+            }
+        }
+        Button("Generate rose".l) {
+            modifier
+                .alignX(AlignmentX.Center)
+                .width(Grow.Std)
+                .margin(horizontal = 16.dp, vertical = 24.dp)
+                .onClick {
+                    if (roses.children.isNotEmpty() && isReplaceRose.value) {
+                        val remNd = roses.children.last()
+                        roses.removeNode(remNd)
+                        remNd.release()
+                    }
+                    val seed = if (seedText.value.isNotEmpty()) seedText.value else randomSeedText.value
+                    randomSeedText.set("${randomI()}")
+                    roses.makeRose(seed.hashCode())
+                }
+        }
+        Button("Empty vase".l) {
+            modifier
+                .alignX(AlignmentX.Center)
+                .width(Grow.Std)
+                .margin(horizontal = 16.dp, vertical = 24.dp)
+                .onClick {
+                    roses.children.forEach { it.release() }
+                    roses.clearChildren()
+                }
+        }
+        LabeledSwitch("Replace last rose".l, isReplaceRose)
+        LabeledSwitch("Auto rotate view".l, isAutoRotate)
+    }
+}

@@ -1,0 +1,287 @@
+package de.fabmax.kool.pipeline.backend.webgpu
+
+import de.fabmax.kool.PassData
+import de.fabmax.kool.ViewData
+import de.fabmax.kool.math.Vec2i
+import de.fabmax.kool.pipeline.*
+import de.fabmax.kool.pipeline.backend.stats.BackendStats
+import de.fabmax.kool.util.BaseReleasable
+import de.fabmax.kool.util.releaseWith
+import kotlin.time.Duration.Companion.nanoseconds
+
+abstract class WgpuRenderPass(
+    val depthFormat: GPUTextureFormat?,
+    numSamples: Int,
+    val backend: RenderBackendWebGpu
+) : BaseReleasable() {
+
+    val numSamples = numSamples.coerceAtMost(4)
+    val isMultiSampled: Boolean get() = numSamples > 1
+
+    private var beginTimestamp: WgpuTimestamps.QuerySlot? = null
+    private var endTimestamp: WgpuTimestamps.QuerySlot? = null
+
+    protected val device: GPUDevice
+        get() = backend.device
+
+    abstract val colorTargetFormats: List<GPUTextureFormat>
+
+    protected fun render(passData: PassData, passEncoderState: RenderPassEncoderState) {
+        val renderPass = passData.gpuPass as RenderPass
+        var timestampWrites: GPURenderPassTimestampWrites? = null
+        if (renderPass.isProfileGpu) {
+            createTimestampQueries()
+            val begin = beginTimestamp
+            val end = endTimestamp
+            if (begin != null && end != null && begin.isReady && end.isReady) {
+                renderPass.tGpu = (end.latestResult - begin.latestResult).nanoseconds
+                timestampWrites = backend.timestampQuery.getQuerySet()?.let { GPURenderPassTimestampWrites(it, begin.index, end.index) }
+            }
+        }
+
+        when (val mode = renderPass.mipMode) {
+            is RenderPass.MipMode.Render -> {
+                val numLevels = mode.getRenderMipLevels(renderPass.dimensions)
+                if (mode.renderOrder == RenderPass.MipMapRenderOrder.HigherResolutionFirst) {
+                    for (mipLevel in 0 until numLevels) {
+                        passData.renderMipLevel(renderPass, mipLevel, passEncoderState, timestampWrites)
+                    }
+                } else {
+                    for (mipLevel in (numLevels-1) downTo 0) {
+                        passData.renderMipLevel(renderPass, mipLevel, passEncoderState, timestampWrites)
+                    }
+                }
+            }
+            else -> passData.renderMipLevel(renderPass, 0, passEncoderState, timestampWrites)
+        }
+
+        if (renderPass.mipMode == RenderPass.MipMode.Generate) {
+            passEncoderState.ensureRenderPassInactive()
+            generateMipLevels(passEncoderState.encoder)
+        }
+
+        for (i in passData.frameCopies.indices) {
+            passEncoderState.ensureRenderPassInactive()
+            copy(passData.frameCopies[i], passEncoderState.encoder)
+        }
+    }
+
+    private fun PassData.renderMipLevel(renderPass: RenderPass, mipLevel: Int, passEncoderState: RenderPassEncoderState, timestampWrites: GPURenderPassTimestampWrites?) {
+        renderPass.setupMipLevel(mipLevel)
+        if (renderPass is OffscreenPassCube) {
+            var layer = 0
+            forEachView { viewData ->
+                passEncoderState.beginRenderPass(renderPass, this@WgpuRenderPass, mipLevel, layer++, timestampWrites)
+                renderView(viewData, passEncoderState)
+            }
+        } else {
+            passEncoderState.beginRenderPass(renderPass, this@WgpuRenderPass, mipLevel, timestampWrites = timestampWrites)
+            forEachView { viewData ->
+                renderView(viewData, passEncoderState)
+            }
+        }
+    }
+
+    private fun createTimestampQueries() {
+        if (beginTimestamp == null) {
+            beginTimestamp = backend.timestampQuery.createQuery()?.also { it.releaseWith(this) }
+        }
+        if (endTimestamp == null) {
+            endTimestamp = backend.timestampQuery.createQuery()?.also { it.releaseWith(this) }
+        }
+    }
+
+    private fun renderView(viewData: ViewData, passEncoderState: RenderPassEncoderState) {
+        val mipLevel = passEncoderState.mipLevel
+        val layer = passEncoderState.layer
+        viewData.drawQueue.view.setupView()
+
+        val viewport = viewData.viewport
+        val x = (viewport.x shr mipLevel).toFloat()
+        val y = (viewport.y shr mipLevel).toFloat()
+        val w = (viewport.width shr mipLevel).toFloat()
+        val h = (viewport.height shr mipLevel).toFloat()
+        passEncoderState.passEncoder.setViewport(x, y, w, h, 0f, 1f)
+
+        // only do copy when last mip-level is rendered
+        val isLastMipLevel = mipLevel == viewData.numMipLevels - 1
+        var nextFrameCopyI = 0
+        var nextFrameCopy = if (isLastMipLevel) viewData.frameCopies.getOrNull(nextFrameCopyI++) else null
+
+        viewData.drawQueue.forEach { cmd ->
+            nextFrameCopy?.let { frameCopy ->
+                if (cmd.drawGroupId > frameCopy.drawGroupId) {
+                    val rp = passEncoderState.renderPass
+                    passEncoderState.ensureRenderPassInactive()
+                    copy(frameCopy, passEncoderState.encoder)
+                    passEncoderState.beginRenderPass(rp, this, mipLevel, layer, forceLoad = true)
+                    nextFrameCopy = viewData.frameCopies.getOrNull(nextFrameCopyI++)
+                }
+            }
+
+            val insts = cmd.instanceData
+            val isCmdValid = cmd.isActive && cmd.vertexData.numIndices > 0 && (insts == null || insts.numInstances > 0)
+            val bindSuccessful = isCmdValid && backend.pipelineManager.bindDrawPipeline(cmd, passEncoderState)
+            if (bindSuccessful) {
+                if (insts == null) {
+                    passEncoderState.passEncoder.drawIndexed(cmd.vertexData.numIndices)
+                    BackendStats.addDrawCommands(1, cmd.vertexData.numPrimitives)
+                } else {
+                    passEncoderState.passEncoder.drawIndexed(cmd.vertexData.numIndices, insts.numInstances)
+                    BackendStats.addDrawCommands(1, cmd.vertexData.numPrimitives * insts.numInstances)
+                }
+            }
+        }
+
+        nextFrameCopy?.let {
+            val rp = passEncoderState.renderPass
+            passEncoderState.ensureRenderPassInactive()
+            copy(it, passEncoderState.encoder)
+            passEncoderState.beginRenderPass(rp, this, mipLevel, layer, forceLoad = true)
+        }
+    }
+
+    abstract fun beginRenderPass(
+        passEncoderState: RenderPassEncoderState,
+        forceLoad: Boolean,
+        timestampWrites: GPURenderPassTimestampWrites?
+    ): GPURenderPassEncoder
+
+    open fun endRenderPass(passEncoderState: RenderPassEncoderState) {
+        passEncoderState.passEncoder.end()
+    }
+
+    protected abstract fun generateMipLevels(encoder: GPUCommandEncoder)
+
+    protected abstract fun copy(frameCopy: FrameCopy, encoder: GPUCommandEncoder)
+
+    inner class Attachments(
+        val colorFormats: List<GPUTextureFormat>,
+        val depthFormat: GPUTextureFormat?,
+        val layers: Int,
+        val isCopySrc: Boolean,
+        val parentPass: RenderPass,
+        val size: Vec2i,
+    ) : BaseReleasable() {
+        val colorImages = colorFormats.map { format ->
+            createImage(size.x, size.y, numSamples, format)
+        }
+        val depthImage = depthFormat?.let { format ->
+            createImage(size.x, size.y, numSamples, format)
+        }
+
+        val resolveColorImages = if (!isMultiSampled) emptyList() else colorFormats.map { format ->
+            createImage(size.x, size.y, 1, format)
+        }
+        val isResolveDepth = isMultiSampled && parentPass.depthAttachment is RenderPassDepthTextureAttachment<*>
+        val resolveDepthImage = if (!isResolveDepth) null else depthFormat?.let { format ->
+            createImage(size.x, size.y, 1, format)
+        }
+
+        val colorMipViews = colorImages.map { it.createMipViews() }
+        val depthMipViews = depthImage?.createMipViews() ?: emptyList()
+
+        val resolveColorMipViews = resolveColorImages.map { it.createMipViews() }
+        val resolveDepthMipViews = resolveDepthImage?.createMipViews() ?: emptyList()
+
+        val colorViewsByLayerAndMip = (0..<layers).map { layer ->
+            (0..<parentPass.numRenderMipLevels).map { mipLevel ->
+                (0..<colorImages.size).map { attachment ->
+                    getColorView(attachment, mipLevel, layer)
+                }
+            }
+        }
+
+        val resolveColorViewsByLayerAndMip = (0..<layers).map { layer ->
+            (0..<parentPass.numRenderMipLevels).map { mipLevel ->
+                (0..<resolveColorImages.size).map { attachment ->
+                    getResolveColorView(attachment, mipLevel, layer)
+                }
+            }
+        }
+
+        private fun createImage(width: Int, height: Int, samples: Int, format: GPUTextureFormat): WgpuTextureResource {
+            val copySrcUsage = if (isCopySrc) GPUTextureUsage.COPY_SRC else 0
+            val usage = GPUTextureUsage.TEXTURE_BINDING or GPUTextureUsage.RENDER_ATTACHMENT or copySrcUsage
+
+            return createImageWithUsage(width, height, samples, format, usage)
+        }
+
+        private fun createImageWithUsage(width: Int, height: Int, samples: Int, format: GPUTextureFormat, usage: Int): WgpuTextureResource {
+            val descriptor = GPUTextureDescriptor(
+                label = parentPass.name,
+                size = intArrayOf(width, height, layers),
+                format = format,
+                usage = usage,
+                dimension = GPUTextureDimension.texture2d,
+                mipLevelCount = parentPass.numTextureMipLevels,
+                sampleCount = samples
+            )
+            return backend.createTexture(descriptor)
+        }
+
+        private fun WgpuTextureResource.createMipViews() = List<List<GPUTextureView>>(parentPass.numRenderMipLevels) { mipLevel ->
+            List<GPUTextureView>(layers) { layer ->
+                gpuTexture.createView(baseMipLevel = mipLevel, mipLevelCount = 1, baseArrayLayer = layer, arrayLayerCount = 1)
+            }
+        }
+
+        fun getColorView(attachment: Int, mipLevel: Int, layer: Int = 0): GPUTextureView {
+            return colorMipViews[attachment][mipLevel][layer]
+        }
+
+        fun getColorViews(mipLevel: Int, layer: Int = 0): List<GPUTextureView> {
+            return colorViewsByLayerAndMip[layer][mipLevel]
+        }
+
+        fun getDepthView(mipLevel: Int, layer: Int = 0): GPUTextureView? {
+            return depthMipViews.getOrNull(mipLevel)?.get(layer)
+        }
+
+        fun getResolveColorView(attachment: Int, mipLevel: Int, layer: Int = 0): GPUTextureView {
+            return resolveColorMipViews[attachment][mipLevel][layer]
+        }
+
+        fun getResolveColorViews(mipLevel: Int, layer: Int = 0): List<GPUTextureView> {
+            return resolveColorViewsByLayerAndMip[layer][mipLevel]
+        }
+
+        fun getResolveDepthView(mipLevel: Int, layer: Int = 0): GPUTextureView? {
+            return resolveDepthMipViews.getOrNull(mipLevel)?.get(layer)
+        }
+
+        fun copyColorToTexture(attachment: Int, target: Texture<*>, encoder: GPUCommandEncoder) {
+            val src = if (isMultiSampled) resolveColorImages[attachment] else colorImages[attachment]
+            copyToTexture(target, src, colorFormats[attachment], encoder)
+        }
+
+        fun copyDepthToTexture(target: Texture<*>, encoder: GPUCommandEncoder) {
+            val src = if (isMultiSampled) resolveDepthImage else depthImage
+            copyToTexture(target, src!!, depthFormat!!, encoder)
+        }
+
+        private fun copyToTexture(target: Texture<*>, src: WgpuTextureResource, format: GPUTextureFormat, encoder: GPUCommandEncoder) {
+            var copyDst = (target.gpuTexture as WgpuTextureResource?)
+            if (copyDst == null || copyDst.width != size.x || copyDst.height != size.y) {
+                copyDst?.release()
+                copyDst = createImageWithUsage(
+                    width = size.x,
+                    height = size.y,
+                    samples = 1,
+                    format = format,
+                    usage = GPUTextureUsage.COPY_DST or GPUTextureUsage.TEXTURE_BINDING or GPUTextureUsage.RENDER_ATTACHMENT,
+                )
+                target.gpuTexture = copyDst
+            }
+            backend.textureLoader.copyTexture2d(src.gpuTexture, copyDst.gpuTexture, parentPass.numTextureMipLevels, encoder)
+        }
+
+        override fun doRelease() {
+            colorImages.forEach { it.release() }
+            depthImage?.release()
+            resolveColorImages.forEach { it.release() }
+            resolveDepthImage?.release()
+        }
+    }
+
+}
