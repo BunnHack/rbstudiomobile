@@ -93,6 +93,12 @@ private data class StudioScriptDocument(
     val targetId: String
 )
 
+/** Holds a script document's editable text outside composition so it survives
+ *  tab switches, recomposition, and editor teardown. */
+class ScriptEditorState(initial: String) {
+    var code by mutableStateOf(initial)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StudioScreen(viewModel: StudioViewModel) {
@@ -119,6 +125,9 @@ fun StudioScreen(viewModel: StudioViewModel) {
     var leftPanelTab by remember { mutableStateOf(0) } // 0: Toolbox, 1: Console Output
     var openScriptDocuments by remember { mutableStateOf<List<StudioScriptDocument>>(emptyList()) }
     var activeDocumentTabId by remember { mutableStateOf(VIEWPORT_DOCUMENT_TAB_ID) }
+    // Editable sources live at the screen level so switching to the Viewport tab and
+    // back does not reset the editor to the part's last-saved script.
+    val scriptDocumentStates = remember { mutableMapOf<String, ScriptEditorState>() }
     var showGameSettings by remember { mutableStateOf(false) }
     var showPublishDialog by remember { mutableStateOf(false) }
 
@@ -155,6 +164,7 @@ fun StudioScreen(viewModel: StudioViewModel) {
 
     fun closeScriptDocument(documentId: String) {
         openScriptDocuments = openScriptDocuments.filterNot { it.id == documentId }
+        scriptDocumentStates.remove(documentId)
         if (activeDocumentTabId == documentId) {
             activeDocumentTabId = VIEWPORT_DOCUMENT_TAB_ID
         }
@@ -671,6 +681,7 @@ fun StudioScreen(viewModel: StudioViewModel) {
                     showLeftPanel = showLeftPanel,
                     showRightPanel = showRightPanel,
                     scriptDocuments = openScriptDocuments,
+                    scriptDocumentStates = scriptDocumentStates,
                     activeDocumentTabId = activeDocumentTabId,
                     onActiveDocumentTabChange = { activeDocumentTabId = it },
                     onCloseScriptDocument = { closeScriptDocument(it) },
@@ -838,6 +849,7 @@ private fun ViewportDocumentArea(
     showLeftPanel: Boolean,
     showRightPanel: Boolean,
     scriptDocuments: List<StudioScriptDocument>,
+    scriptDocumentStates: MutableMap<String, ScriptEditorState>,
     activeDocumentTabId: String,
     onActiveDocumentTabChange: (String) -> Unit,
     onCloseScriptDocument: (String) -> Unit,
@@ -861,14 +873,16 @@ private fun ViewportDocumentArea(
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth().background(if (activeScriptDocument != null) Color(0xFF1B1B1B) else Color(0xFF1E2638))) {
             if (activeScriptDocument != null) {
+                val documentState = scriptDocumentStates.getOrPut(activeScriptDocument.id) {
+                    ScriptEditorState(activeScriptDocument.initialSource)
+                }
                 ScriptEditor(
                     viewModel = viewModel,
                     documentId = activeScriptDocument.id,
                     title = activeScriptDocument.title,
-                    initialSource = activeScriptDocument.initialSource,
                     targetPath = activeScriptDocument.targetPath,
-                    onSaveSource = { onSaveScriptDocument(activeScriptDocument, it) },
-                    onClose = { onCloseScriptDocument(activeScriptDocument.id) }
+                    state = documentState,
+                    onSaveSource = { onSaveScriptDocument(activeScriptDocument, it) }
                 )
             } else {
                 ViewportPane(

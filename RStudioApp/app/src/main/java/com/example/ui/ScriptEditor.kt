@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -19,6 +18,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,37 +35,41 @@ import androidx.compose.ui.unit.sp
 import com.example.viewmodels.StudioViewModel
 import kotlin.math.max
 
+/**
+ * Code editor for one script document. The editable text lives in [state], owned by
+ * the screen, so switching to the Viewport tab and back preserves it (and preserves
+ * cursor/scroll position via the shared scroll states below).
+ *
+ * The document is persisted automatically: 600ms after the last edit, and when the
+ * editor leaves the composition (tab switch / close) with unsaved changes.
+ */
 @Composable
 fun ScriptEditor(
     viewModel: StudioViewModel,
     documentId: String,
     title: String,
-    initialSource: String,
     targetPath: String,
-    onSaveSource: (String) -> Unit,
-    onClose: () -> Unit
+    state: ScriptEditorState,
+    onSaveSource: (String) -> Unit
 ) {
-    val initialCode = remember(documentId, initialSource, targetPath) {
-        initialSource.ifBlank {
-            "-- Lua Script Editor\n-- $targetPath\n\nwhile true do\n  wait(1.0)\n  print(\"Tick!\")\nend"
-        }
-    }
-    var code by remember(documentId) { mutableStateOf(initialCode) }
+    val code = state.code
     var dirty by remember(documentId) { mutableStateOf(false) }
     val lineCount = max(1, code.lines().size)
 
-    fun saveScript() {
-        onSaveSource(code)
-        dirty = false
-        viewModel.logSystem("Compiled and saved script to $targetPath.")
+    // Debounced auto-save while editing.
+    LaunchedEffect(code) {
+        if (dirty) {
+            kotlinx.coroutines.delay(600)
+            onSaveSource(state.code)
+            dirty = false
+        }
     }
 
-    // Auto-save on close: callers route the close action through the document tab
-    // strip; the latest source is persisted when the editor leaves the composition.
+    // Flush pending changes when leaving the composition (tab switch / close).
     androidx.compose.runtime.DisposableEffect(documentId) {
         onDispose {
             if (dirty) {
-                onSaveSource(code)
+                onSaveSource(state.code)
             }
         }
     }
@@ -79,7 +83,7 @@ fun ScriptEditor(
                 code = code,
                 lineCount = lineCount,
                 onCodeChange = {
-                    code = it
+                    state.code = it
                     dirty = true
                 },
                 modifier = Modifier.weight(1f)
@@ -118,60 +122,55 @@ private fun CodeEditorPane(
     onCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Shared scroll states: line numbers and code scroll together vertically, so the
+    // gutter can never drift out of sync with the text (previously the code scrolled
+    // inside its own Box while the gutter scrolled with the outer Row — any layout
+    // mismatch made the editor look clipped at a fixed line).
     val verticalScroll = rememberScrollState()
     val horizontalScroll = rememberScrollState()
     val lineNumbers = remember(lineCount) {
         (1..lineCount).joinToString("\n") { it.toString() }
     }
 
-    BoxWithConstraints(
+    Row(
         modifier = modifier
             .fillMaxSize()
             .background(EditorBackground)
+            .verticalScroll(verticalScroll)
     ) {
-        val viewportHeight = maxHeight
-
-        Row(
+        Text(
+            text = lineNumbers,
+            color = LineNumberText,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
             modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = viewportHeight)
-                .verticalScroll(verticalScroll)
-        ) {
-            Text(
-                text = lineNumbers,
-                color = LineNumberText,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 13.sp,
-                lineHeight = 19.sp,
-                textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                modifier = Modifier
-                    .width(43.dp)
-                    .background(LineGutterBackground)
-                    .padding(top = 8.dp, end = 8.dp)
-            )
+                .width(43.dp)
+                .background(LineGutterBackground)
+                .padding(top = 8.dp, end = 8.dp)
+        )
 
-            Box(
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(horizontalScroll)
+                .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
+        ) {
+            BasicTextField(
+                value = code,
+                onValueChange = onCodeChange,
+                cursorBrush = SolidColor(Color(0xFF4FB2FF)),
+                textStyle = TextStyle(
+                    color = CodeText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp
+                ),
                 modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = viewportHeight)
-                    .horizontalScroll(horizontalScroll)
-                    .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
-            ) {
-                BasicTextField(
-                    value = code,
-                    onValueChange = onCodeChange,
-                    cursorBrush = SolidColor(Color(0xFF4FB2FF)),
-                    textStyle = TextStyle(
-                        color = CodeText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .widthIn(min = 920.dp)
-                )
-            }
+                    .fillMaxWidth()
+                    .widthIn(min = maxWidth)
+            )
         }
     }
 }
