@@ -74,9 +74,6 @@ fun KoolViewport(
             //    constructing the context — must happen before any Scene.
             val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid
                 ?: activity.createDefaultKoolContext()
-            // Detach the surface view from any previous parent (e.g. a disposed
-            // AndroidView holder from an earlier composition) before re-attaching.
-            (kctx.surfaceView.parent as? ViewGroup)?.removeView(kctx.surfaceView)
             // 2) KoolSystem is initialized; build this composition's scene bridge.
             //    The gizmo writeback updates the ViewModel part transform.
             val b = KoolSceneBridge(
@@ -98,7 +95,7 @@ fun KoolViewport(
                 )
             }
         },
-        update = {
+        update = { view ->
             // Sync the parts list into the GPU scene every recomposition, then keep the
             // gizmo bound to the currently selected part's (possibly rebuilt) mesh.
             bridge?.let {
@@ -107,6 +104,40 @@ fun KoolViewport(
                 it.setRoblosecurityCookie(roblosecurityCookie)
                 it.syncSelection(selectedPart)
             }
+            // When this composable re-enters the composition after onRelease (tab
+            // switch / place switch), AndroidView recycles the view returned by the
+            // previous factory run: no new factory call happens, but this update block
+            // DOES run. The surface view must be re-attached and a fresh scene bridge
+            // must be registered, otherwise the context renders zero scenes -> black.
+            if (bridge == null) {
+                val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid ?: return@AndroidView
+                (view.parent as? ViewGroup)?.removeView(view)
+                val b = KoolSceneBridge(
+                    onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
+                    onPartPicked = { picked -> viewModel.selectPart(picked) }
+                )
+                kctx.scenes += b.scene
+                bridge = b
+                b.setRoblosecurityCookie(roblosecurityCookie)
+                b.updateCamera(yaw, pitch, zoom)
+                b.setGizmoMode(activeTool)
+                b.syncParts(parts)
+                b.syncDecals(decals)
+                b.syncSelection(selectedPart)
+            }
+        },
+        onRelease = { view ->
+            // AndroidView calls this when the composable leaves the composition. kool
+            // keeps rendering in the background, so drop this composition's scene and
+            // detach the surface view from its (dying) parent to prevent the render
+            // thread from drawing into a destroyed surface (manifests as black screen
+            // on return and click-through to invisible meshes).
+            bridge?.let { b ->
+                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.scenes?.minusAssign(b.scene)
+                b.dispose()
+            }
+            bridge = null
+            (view.parent as? ViewGroup)?.removeView(view)
         }
     )
 
@@ -146,14 +177,10 @@ fun KoolViewport(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            // Only tear down this composition's scene. The kool context itself is a
-            // process singleton and must stay alive: creating a second KoolContextAndroid
-            // throws "KoolContext was already created" (tab switch / reopening a place).
-            bridge?.let { b ->
-                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.scenes?.minusAssign(b.scene)
-                b.dispose()
-            }
-            bridge = null
+            // Scene teardown happens in AndroidView.onRelease (called on the main
+            // thread during composition disposal). The kool context itself is a
+            // process singleton and must stay alive: creating a second
+            // KoolContextAndroid throws "KoolContext was already created".
         }
     }
 }

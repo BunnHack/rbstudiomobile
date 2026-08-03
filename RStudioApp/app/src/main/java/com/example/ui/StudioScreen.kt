@@ -849,7 +849,7 @@ private fun ViewportDocumentArea(
 
     Column(
         modifier = modifier
-            .background(Color(0xFF1E2638))
+            .background(if (scriptDocuments.firstOrNull { it.id == activeDocumentTabId } != null) Color(0xFF1B1B1B) else Color(0xFF1E2638))
             .border(BorderStroke(0.5.dp, Color(0xFF2E2E2E)))
     ) {
         WorkspaceDocumentTabStrip(
@@ -859,7 +859,7 @@ private fun ViewportDocumentArea(
             onClose = onCloseScriptDocument
         )
 
-        Box(modifier = Modifier.weight(1f).fillMaxWidth().background(Color(0xFF1E2638))) {
+        Box(modifier = Modifier.weight(1f).fillMaxWidth().background(if (activeScriptDocument != null) Color(0xFF1B1B1B) else Color(0xFF1E2638))) {
             if (activeScriptDocument != null) {
                 ScriptEditor(
                     viewModel = viewModel,
