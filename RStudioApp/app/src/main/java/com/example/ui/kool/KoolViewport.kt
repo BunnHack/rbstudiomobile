@@ -19,6 +19,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.models.Part
 import com.example.viewmodels.StudioViewModel
+import de.fabmax.kool.KoolSystem
 import de.fabmax.kool.createDefaultKoolContext
 import de.fabmax.kool.platform.KoolContextAndroid
 
@@ -55,8 +56,11 @@ fun KoolViewport(
     val roblosecurityCookie by viewModel.roblosecurityCookie.collectAsState()
     val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
 
-    // Bridge + context are created together inside the factory (correct init order).
-    var koolCtx by remember { mutableStateOf<KoolContextAndroid?>(null) }
+    // The kool context is a process-wide singleton (KoolSystem throws if a second one
+    // is created), so it survives tab switches / place switches. Each KoolViewport
+    // composition gets its own SceneBridge (its own Scene), while the context and its
+    // surface view are reused. The old bridge's scene must be removed from the context
+    // when this composable leaves the composition.
     var bridge by remember { mutableStateOf<KoolSceneBridge?>(null) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -65,10 +69,15 @@ fun KoolViewport(
         factory = { ctx ->
             val activity = unwrapActivity(ctx)
                 ?: error("KoolViewport requires an Activity context")
-            // 1) Boot kool: createDefaultKoolContext() runs KoolSystem.initialize(config)
-            //    BEFORE constructing the context — must happen before any Scene.
-            val kctx = activity.createDefaultKoolContext()
-            // 2) Now KoolSystem is initialized; build the scene bridge (Scene DSL safe).
+            // 1) Boot kool once per process; reuse the existing context afterwards.
+            //    createDefaultKoolContext() runs KoolSystem.initialize(config) BEFORE
+            //    constructing the context — must happen before any Scene.
+            val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid
+                ?: activity.createDefaultKoolContext()
+            // Detach the surface view from any previous parent (e.g. a disposed
+            // AndroidView holder from an earlier composition) before re-attaching.
+            (kctx.surfaceView.parent as? ViewGroup)?.removeView(kctx.surfaceView)
+            // 2) KoolSystem is initialized; build this composition's scene bridge.
             //    The gizmo writeback updates the ViewModel part transform.
             val b = KoolSceneBridge(
                 onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
@@ -76,11 +85,11 @@ fun KoolViewport(
             )
             kctx.scenes += b.scene
             kctx.run()
-            koolCtx = kctx
             bridge = b
             b.setRoblosecurityCookie(roblosecurityCookie)
             b.updateCamera(yaw, pitch, zoom)
             b.setGizmoMode(activeTool)
+            b.syncParts(parts)
             // 3) Embed kool's surface view, sized to fill the Compose layout.
             kctx.surfaceView.apply {
                 layoutParams = ViewGroup.LayoutParams(
@@ -121,19 +130,29 @@ fun KoolViewport(
         // kool clears with the scene's configured background; nothing extra for now.
     }
 
-    // Wire kool lifecycle (resume / pause / destroy) to the Compose lifecycle owner.
+    // Wire kool lifecycle (resume / pause) to the Compose lifecycle owner.
     DisposableEffect(lifecycleOwner) {
         val observer = object : DefaultLifecycleObserver {
-            override fun onResume(owner: LifecycleOwner) { koolCtx?.onResume() }
-            override fun onPause(owner: LifecycleOwner) { koolCtx?.onPause() }
-            override fun onStop(owner: LifecycleOwner) { koolCtx?.onPause() }
+            override fun onResume(owner: LifecycleOwner) {
+                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.onResume()
+            }
+            override fun onPause(owner: LifecycleOwner) {
+                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.onPause()
+            }
+            override fun onStop(owner: LifecycleOwner) {
+                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.onPause()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            bridge?.dispose()
-            koolCtx?.onDestroy()
-            koolCtx = null
+            // Only tear down this composition's scene. The kool context itself is a
+            // process singleton and must stay alive: creating a second KoolContextAndroid
+            // throws "KoolContext was already created" (tab switch / reopening a place).
+            bridge?.let { b ->
+                (KoolSystem.getContextOrNull() as? KoolContextAndroid)?.scenes?.minusAssign(b.scene)
+                b.dispose()
+            }
             bridge = null
         }
     }
