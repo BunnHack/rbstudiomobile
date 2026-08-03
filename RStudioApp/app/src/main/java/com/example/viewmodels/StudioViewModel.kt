@@ -1310,6 +1310,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
      * Imports a Roblox .rbxm/.rbxl (binary) or .rbxmx/.rbxlx (XML) file, parsing it into
      * [Part]s and adding them to the workspace.
      */
+    /** Serializes the current scene to .rbxl bytes. Returns null when no place is open. */
+    fun exportActivePlaceAsRbxl(): Pair<String, ByteArray>? {
+        val currentPlace = _activePlace.value ?: return null
+        val currentParts = if (_isPlaying.value) simulationOriginalState else _parts.value
+        val fileName = currentPlace.name.ifBlank { "place" }
+            .replace(Regex("[^A-Za-z0-9._-]"), "_") + ".rbxl"
+        val bytes = RobloxPlaceBinarySerializer.serialize(currentPlace.name, currentParts)
+        return fileName to bytes
+    }
+
     fun importRobloxFile(data: ByteArray, fileName: String) {
         try {
             val instances = com.example.parser.RobloxParser.parseRobloxFile(data)

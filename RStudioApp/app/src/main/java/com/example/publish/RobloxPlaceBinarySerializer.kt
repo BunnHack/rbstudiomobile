@@ -5,18 +5,34 @@ import com.example.models.Vector3
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.abs
+import java.util.UUID
 import kotlin.math.cos
 import kotlin.math.sin
 
+/**
+ * Serializes the current scene into the Roblox binary place format (.rbxl).
+ *
+ * The layout follows the spec implemented by github.com/RobloxAPI/rbxfile:
+ *  - Header: "<roblox!" + 0x89FF0D0A1A0A + version(0) + classCount + instanceCount + 8 reserved
+ *  - Chunks: META, SSTR, INST (one per class), PROP (one per class+property), PRNT, END
+ *  - Chunks are stored uncompressed (compressedLength = 0); the server accepts both.
+ *  - Referents are sequential (0..n) assigned in DataModel-tree order, services first.
+ *  - Referent/int32 arrays are zigzag + big-endian + byte-interleaved.
+ *  - Float arrays use the Roblox float transform (rotl(bits,1)), big-endian, interleaved.
+ *  - Vector3/Color3 write X,Y,Z as one interleaved block (not three separate blocks).
+ *  - CFrame rotations are written as special orientation IDs (0x02 = identity, 0x00 = raw matrix).
+ *  - Chunk order matches Studio: INST chunks sorted by class name, then PROP chunks per class.
+ */
 object RobloxPlaceBinarySerializer {
-    @Suppress("UNUSED_PARAMETER")
     fun serialize(placeName: String, parts: List<Part>): ByteArray {
-        val instances = buildInstances(placeName, parts)
-        val classes = linkedMapOf<String, MutableList<InstanceRecord>>()
-        instances.forEach { instance ->
-            classes.getOrPut(instance.className) { mutableListOf() }.add(instance)
-        }
+        val instances = buildInstances(parts)
+        // Sequential referents in declaration order (DataModel tree order).
+        instances.forEachIndexed { index, instance -> instance.referent = index }
+
+        // Group by class, chunks sorted by class name like Studio does.
+        val classes = instances
+            .groupBy { it.className }
+            .toSortedMap()
         val classIds = classes.keys.withIndex().associate { (index, className) -> className to index }
 
         val writer = BinaryWriter()
@@ -42,34 +58,49 @@ object RobloxPlaceBinarySerializer {
         return writer.toByteArray()
     }
 
-    private fun buildInstances(placeName: String, parts: List<Part>): List<InstanceRecord> {
+    private fun buildInstances(parts: List<Part>): List<InstanceRecord> {
         val instances = mutableListOf<InstanceRecord>()
-        var nextId = 0
-        fun add(className: String, name: String, parentId: Int = -1): InstanceRecord {
-            val instance = InstanceRecord(nextId++, className, name, parentId, linkedMapOf())
+        fun add(className: String, name: String, parent: InstanceRecord?): InstanceRecord {
+            val instance = InstanceRecord(className, name, parent)
             instances.add(instance)
             return instance
         }
 
-        val workspace = add("Workspace", "Workspace")
-        workspace.props["Gravity"] = 196.2f
-        workspace.props["FallenPartsDestroyHeight"] = -500f
-
-        val lighting = add("Lighting", "Lighting")
-        lighting.props["Brightness"] = 2f
-        lighting.props["GlobalShadows"] = true
-        lighting.props["TimeOfDay"] = "14:30:00"
-
-        add("ReplicatedStorage", "ReplicatedStorage")
-        add("ServerScriptService", "ServerScriptService")
-        add("ServerStorage", "ServerStorage")
-        add("StarterGui", "StarterGui")
-        add("StarterPack", "StarterPack")
+        // Core services required for a place to load and run.
+        val workspace = add("Workspace", "Workspace", null).apply {
+            props["Gravity"] = 196.2f
+            props["FallenPartsDestroyHeight"] = -500f
+            props["StreamingEnabled"] = false
+            props["DistributedGameTime"] = 0.0
+            props["GlobalWind"] = Vector3.Zero
+            props["ExplicitAutoJoints"] = true
+        }
+        add("Players", "Players", null).apply {
+            props["MaxPlayersInternal"] = 6
+            props["PreferredPlayersInternal"] = 6
+            props["CharacterAutoLoads"] = true
+            props["RespawnTime"] = 3f
+        }
+        val lighting = add("Lighting", "Lighting", null).apply {
+            props["Brightness"] = 2f
+            props["GlobalShadows"] = true
+            props["TimeOfDay"] = "14:30:00"
+            props["Technology"] = 3
+        }
+        add("ReplicatedFirst", "ReplicatedFirst", null)
+        add("ReplicatedStorage", "ReplicatedStorage", null)
+        add("ServerScriptService", "ServerScriptService", null)
+        add("ServerStorage", "ServerStorage", null)
+        add("StarterGui", "StarterGui", null)
+        add("StarterPack", "StarterPack", null)
+        add("StarterPlayer", "StarterPlayer", null)
+        add("Teams", "Teams", null)
+        add("SoundService", "SoundService", null)
 
         parts.forEachIndexed { index, part ->
-            val instance = add(classNameFor(part), part.name.ifBlank { "Part${index + 1}" }, workspace.id)
+            val instance = add(classNameFor(part), part.name.ifBlank { "Part${index + 1}" }, workspace)
             addBasePartProps(instance, part)
-            if (instance.className == "Part") {
+            if (instance.className == "Part" || instance.className == "SpawnLocation") {
                 instance.props["Shape"] = shapeToken(part.shape)
             }
             if (instance.className == "SpawnLocation") {
@@ -79,7 +110,7 @@ object RobloxPlaceBinarySerializer {
                 instance.props["Neutral"] = part.neutral
             }
             if (part.script.isNotBlank()) {
-                val script = add("Script", "Script", instance.id)
+                val script = add("Script", "Script", instance)
                 script.props["Source"] = part.script
                 script.props["Disabled"] = false
             }
@@ -109,9 +140,10 @@ object RobloxPlaceBinarySerializer {
         instance.props["RootPriority"] = part.rootPriority
         instance.props["MaterialVariantSerialized"] = part.materialVariant
         instance.props["Material"] = materialToken(part.material)
-        instance.props["Size"] = part.size
-        instance.props["Color"] = colorFromHex(part.colorHex)
+        instance.props["size"] = part.size
+        instance.props["Color3uint8"] = colorFromHex(part.colorHex)
         instance.props["CFrame"] = CFrameValue(part.position, rotationMatrix(part.rotation))
+        instance.props["PivotOffset"] = CFrameValue(Vector3.Zero, rotationMatrix(Vector3.Zero))
         instance.props["Velocity"] = part.velocity
         instance.props["RotVelocity"] = part.rotVelocity
         instance.props["formFactorRaw"] = part.formFactorRaw
@@ -121,6 +153,9 @@ object RobloxPlaceBinarySerializer {
         instance.props["RightSurface"] = surfaceToken(part.rightSurface)
         instance.props["FrontSurface"] = surfaceToken(part.frontSurface)
         instance.props["BackSurface"] = surfaceToken(part.backSurface)
+        instance.props["CustomPhysicalProperties"] = 0.toByte() // PhysicalProperties: CustomPhysics = false
+        instance.props["SourceAssetId"] = -1L
+        instance.props["UniqueId"] = randomUniqueId()
     }
 
     private fun writeMetaChunk(writer: BinaryWriter) {
@@ -136,8 +171,8 @@ object RobloxPlaceBinarySerializer {
 
     private fun writeSharedStringsChunk(writer: BinaryWriter) {
         val chunk = BinaryWriter()
-        chunk.writeUInt32LE(0)
-        chunk.writeUInt32LE(0)
+        chunk.writeUInt32LE(0) // version
+        chunk.writeUInt32LE(0) // count
         writeChunk(writer, "SSTR", chunk.toByteArray())
     }
 
@@ -153,19 +188,10 @@ object RobloxPlaceBinarySerializer {
         val service = className in SERVICE_CLASSES
         chunk.writeUInt8(if (service) 1 else 0)
         chunk.writeInt32LE(instances.size)
-
-        var lastReferent = 0
-        val referents = IntArray(instances.size) { index ->
-            val delta = instances[index].id - lastReferent
-            lastReferent = instances[index].id
-            zigZag32(delta)
-        }
-        chunk.writeInterleavedUInt32(referents)
-
+        chunk.writeInterleavedInts(instances.map { it.referent }.toIntArray(), zigzag = true, accumulate = true)
         if (service) {
             chunk.writeBytes(ByteArray(instances.size) { 1 })
         }
-
         writeChunk(writer, "INST", chunk.toByteArray())
     }
 
@@ -181,13 +207,24 @@ object RobloxPlaceBinarySerializer {
             "Workspace" -> {
                 writeFloatProp(writer, classId, "Gravity", instances.map { it.props["Gravity"] as Float })
                 writeFloatProp(writer, classId, "FallenPartsDestroyHeight", instances.map { it.props["FallenPartsDestroyHeight"] as Float })
+                writeBoolProp(writer, classId, "StreamingEnabled", instances.map { it.props["StreamingEnabled"] as Boolean })
+                writeDoubleProp(writer, classId, "DistributedGameTime", instances.map { it.props["DistributedGameTime"] as Double })
+                writeVector3Prop(writer, classId, "GlobalWind", instances.map { it.props["GlobalWind"] as Vector3 })
+                writeBoolProp(writer, classId, "ExplicitAutoJoints", instances.map { it.props["ExplicitAutoJoints"] as Boolean })
+            }
+            "Players" -> {
+                writeIntProp(writer, classId, "MaxPlayersInternal", instances.map { it.props["MaxPlayersInternal"] as Int })
+                writeIntProp(writer, classId, "PreferredPlayersInternal", instances.map { it.props["PreferredPlayersInternal"] as Int })
+                writeBoolProp(writer, classId, "CharacterAutoLoads", instances.map { it.props["CharacterAutoLoads"] as Boolean })
+                writeFloatProp(writer, classId, "RespawnTime", instances.map { it.props["RespawnTime"] as Float })
             }
             "Lighting" -> {
                 writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as Float })
                 writeBoolProp(writer, classId, "GlobalShadows", instances.map { it.props["GlobalShadows"] as Boolean })
                 writeStringProp(writer, classId, "TimeOfDay", instances.map { it.props["TimeOfDay"] as String })
+                writeEnumProp(writer, classId, "Technology", instances.map { it.props["Technology"] as Int })
             }
-            "Part", "WedgePart", "SpawnLocation" -> writeBasePartProps(writer, classId, instances, className == "Part")
+            "Part", "WedgePart", "SpawnLocation" -> writeBasePartProps(writer, classId, instances, className != "WedgePart")
             "Script", "LocalScript" -> {
                 writeStringProp(writer, classId, "Source", instances.map { it.props["Source"] as? String ?: "" })
                 writeBoolProp(writer, classId, "Disabled", instances.map { it.props["Disabled"] as? Boolean ?: false })
@@ -222,42 +259,30 @@ object RobloxPlaceBinarySerializer {
         writeIntProp(writer, classId, "RootPriority", instances.map { it.props["RootPriority"] as Int })
         writeStringProp(writer, classId, "MaterialVariantSerialized", instances.map { it.props["MaterialVariantSerialized"] as String })
         writeEnumProp(writer, classId, "Material", instances.map { it.props["Material"] as Int })
-        writeVector3Prop(writer, classId, "Size", instances.map { it.props["Size"] as Vector3 })
-        writeColor3Prop(writer, classId, "Color", instances.map { it.props["Color"] as Color3Value })
+        writeVector3Prop(writer, classId, "size", instances.map { it.props["size"] as Vector3 })
+        writeColor3uint8Prop(writer, classId, "Color3uint8", instances.map { it.props["Color3uint8"] as Int })
         writeCFrameProp(writer, classId, "CFrame", instances.map { it.props["CFrame"] as CFrameValue })
+        writeCFrameProp(writer, classId, "PivotOffset", instances.map { it.props["PivotOffset"] as CFrameValue })
+        writePhysicalPropertiesProp(writer, classId, "CustomPhysicalProperties", instances.size)
         writeVector3Prop(writer, classId, "Velocity", instances.map { it.props["Velocity"] as Vector3 })
         writeVector3Prop(writer, classId, "RotVelocity", instances.map { it.props["RotVelocity"] as Vector3 })
-        writeIntProp(writer, classId, "formFactorRaw", instances.map { it.props["formFactorRaw"] as Int })
+        writeEnumProp(writer, classId, "formFactorRaw", instances.map { it.props["formFactorRaw"] as Int })
         listOf("TopSurface", "BottomSurface", "LeftSurface", "RightSurface", "FrontSurface", "BackSurface").forEach { name ->
             writeEnumProp(writer, classId, name, instances.map { it.props[name] as Int })
         }
         if (includeShape) {
-            writeEnumProp(writer, classId, "Shape", instances.map { it.props["Shape"] as Int })
+            writeEnumProp(writer, classId, "shape", instances.map { it.props["Shape"] as Int })
         }
+        writeInt64Prop(writer, classId, "SourceAssetId", instances.map { it.props["SourceAssetId"] as Long })
+        writeUniqueIdProp(writer, classId, "UniqueId", instances.map { it.props["UniqueId"] as String })
     }
 
     private fun writeParentChunk(writer: BinaryWriter, instances: List<InstanceRecord>) {
         val chunk = BinaryWriter()
-        chunk.writeUInt8(0)
+        chunk.writeUInt8(0) // version
         chunk.writeInt32LE(instances.size)
-
-        var lastChild = 0
-        val childReferents = IntArray(instances.size) { index ->
-            val delta = instances[index].id - lastChild
-            lastChild = instances[index].id
-            zigZag32(delta)
-        }
-
-        var lastParent = 0
-        val parentReferents = IntArray(instances.size) { index ->
-            val parentId = instances[index].parentId
-            val delta = parentId - lastParent
-            lastParent = parentId
-            zigZag32(delta)
-        }
-
-        chunk.writeInterleavedUInt32(childReferents)
-        chunk.writeInterleavedUInt32(parentReferents)
+        chunk.writeInterleavedInts(instances.map { it.referent }.toIntArray(), zigzag = true, accumulate = true)
+        chunk.writeInterleavedInts(instances.map { it.parent?.referent ?: -1 }.toIntArray(), zigzag = true, accumulate = true)
         writeChunk(writer, "PRNT", chunk.toByteArray())
     }
 
@@ -268,50 +293,65 @@ object RobloxPlaceBinarySerializer {
         writeProp(writer, classId, name, TYPE_BOOL) { chunk -> values.forEach { chunk.writeUInt8(if (it) 1 else 0) } }
 
     private fun writeIntProp(writer: BinaryWriter, classId: Int, name: String, values: List<Int>) =
-        writeProp(writer, classId, name, TYPE_INT32) { chunk -> chunk.writeInterleavedUInt32(values.map { zigZag32(it) }.toIntArray()) }
+        writeProp(writer, classId, name, TYPE_INT32) { chunk -> chunk.writeInterleavedInts(values.toIntArray(), zigzag = true) }
+
+    private fun writeInt64Prop(writer: BinaryWriter, classId: Int, name: String, values: List<Long>) =
+        writeProp(writer, classId, name, TYPE_INT64) { chunk -> chunk.writeInterleavedInt64(values.toLongArray()) }
 
     private fun writeFloatProp(writer: BinaryWriter, classId: Int, name: String, values: List<Float>) =
-        writeProp(writer, classId, name, TYPE_FLOAT32) { chunk -> chunk.writeInterleavedUInt32(values.map { encodeFloat32(it) }.toIntArray()) }
+        writeProp(writer, classId, name, TYPE_FLOAT32) { chunk -> chunk.writeInterleavedFloats(values.toFloatArray()) }
 
     private fun writeEnumProp(writer: BinaryWriter, classId: Int, name: String, values: List<Int>) =
-        writeProp(writer, classId, name, TYPE_ENUM) { chunk -> chunk.writeInterleavedUInt32(values.toIntArray()) }
+        writeProp(writer, classId, name, TYPE_ENUM) { chunk -> chunk.writeInterleavedInts(values.toIntArray(), zigzag = false) }
 
     private fun writeVector3Prop(writer: BinaryWriter, classId: Int, name: String, values: List<Vector3>) =
         writeProp(writer, classId, name, TYPE_VECTOR3) { chunk ->
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.x) }.toIntArray())
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.y) }.toIntArray())
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.z) }.toIntArray())
+            // Three separate interleaved blocks: all X, then all Y, then all Z.
+            chunk.writeInterleavedFloats(values.map { it.x }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.y }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.z }.toFloatArray())
         }
 
-    private fun writeColor3Prop(writer: BinaryWriter, classId: Int, name: String, values: List<Color3Value>) =
-        writeProp(writer, classId, name, TYPE_COLOR3) { chunk ->
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.r) }.toIntArray())
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.g) }.toIntArray())
-            chunk.writeInterleavedUInt32(values.map { encodeFloat32(it.b) }.toIntArray())
+    private fun writeColor3uint8Prop(writer: BinaryWriter, classId: Int, name: String, values: List<Int>) =
+        writeProp(writer, classId, name, TYPE_COLOR3UINT8) { chunk ->
+            values.forEach { value ->
+                chunk.writeUInt8((value shr 16) and 0xFF)
+                chunk.writeUInt8((value shr 8) and 0xFF)
+                chunk.writeUInt8(value and 0xFF)
+            }
+        }
+
+    private fun writeDoubleProp(writer: BinaryWriter, classId: Int, name: String, values: List<Double>) =
+        writeProp(writer, classId, name, TYPE_DOUBLE) { chunk ->
+            values.forEach { chunk.writeFloat64LE(it) }
+        }
+
+    private fun writePhysicalPropertiesProp(writer: BinaryWriter, classId: Int, name: String, count: Int) =
+        writeProp(writer, classId, name, TYPE_PHYSICALPROPS) { chunk ->
+            // 0x00 = default physical properties (no custom values follow)
+            repeat(count) { chunk.writeUInt8(0) }
+        }
+
+    private fun writeUniqueIdProp(writer: BinaryWriter, classId: Int, name: String, values: List<String>) =
+        writeProp(writer, classId, name, TYPE_UNIQUEID) { chunk ->
+            // 16 bytes: version(4 LE) + variant(4 LE) + timestamp(8 LE). All zero is acceptable.
+            values.forEach { chunk.writeBytes(ByteArray(16)) }
         }
 
     private fun writeCFrameProp(writer: BinaryWriter, classId: Int, name: String, values: List<CFrameValue>) =
         writeProp(writer, classId, name, TYPE_CFRAME) { chunk ->
-            val xs = IntArray(values.size)
-            val ys = IntArray(values.size)
-            val zs = IntArray(values.size)
-
-            values.forEachIndexed { index, value ->
-                val rotation = value.rotation
-                if (isIdentity(rotation)) {
-                    chunk.writeUInt8(0x02)
-                } else {
-                    chunk.writeUInt8(0x00)
-                    rotation.forEach { chunk.writeFloat32LE(it) }
+            values.forEach { value ->
+                val special = cframeSpecialId(value.rotation)
+                chunk.writeUInt8(special)
+                if (special == 0) {
+                    value.rotation.forEach { chunk.writeFloat32LE(it) }
                 }
-                xs[index] = encodeFloat32(value.position.x)
-                ys[index] = encodeFloat32(value.position.y)
-                zs[index] = encodeFloat32(value.position.z)
             }
-
-            chunk.writeInterleavedUInt32(xs)
-            chunk.writeInterleavedUInt32(ys)
-            chunk.writeInterleavedUInt32(zs)
+            // Positions are written as three separate interleaved blocks (X, then Y, then Z),
+            // matching Roblox's reader which deinterleaves per axis.
+            chunk.writeInterleavedFloats(values.map { it.position.x }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.position.y }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.position.z }.toFloatArray())
         }
 
     private fun writeProp(
@@ -331,9 +371,9 @@ object RobloxPlaceBinarySerializer {
 
     private fun writeChunk(writer: BinaryWriter, name: String, data: ByteArray) {
         writer.writeAscii4(name)
-        writer.writeUInt32LE(0)
+        writer.writeUInt32LE(0) // compressedLength = 0 -> uncompressed
         writer.writeUInt32LE(data.size)
-        writer.writeUInt32LE(0)
+        writer.writeUInt32LE(0) // reserved
         writer.writeBytes(data)
     }
 
@@ -361,21 +401,21 @@ object RobloxPlaceBinarySerializer {
         )
     }
 
-    private fun isIdentity(values: FloatArray): Boolean {
-        if (values.size != 9) return false
-        val identity = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
-        return values.indices.all { abs(values[it] - identity[it]) < 0.0001f }
+    /** Maps an axis-aligned rotation matrix to its Roblox special orientation ID (0x02..0x23), or 0 for a raw matrix. */
+    private fun cframeSpecialId(rotation: FloatArray): Int {
+        val index = CFRAME_SPECIAL_MATRICES.indexOfFirst { special ->
+            rotation.indices.all { i -> kotlin.math.abs(rotation[i] - special[i]) < 0.0001f }
+        }
+        return if (index >= 0) CFRAME_SPECIAL_IDS[index] else 0
     }
 
-    private fun colorFromHex(hex: String): Color3Value {
+    private fun colorFromHex(hex: String): Int {
         val rgb = hex.removePrefix("#").padEnd(6, '0').take(6)
         val value = runCatching { rgb.toInt(16) }.getOrDefault(0xCCCCCC)
-        return Color3Value(
-            r = ((value shr 16) and 0xFF) / 255f,
-            g = ((value shr 8) and 0xFF) / 255f,
-            b = (value and 0xFF) / 255f
-        )
+        return (0xFF shl 24) or value
     }
+
+    private fun randomUniqueId(): String = UUID.randomUUID().toString().replace("-", "")
 
     private fun materialToken(material: String): Int = when (material) {
         Part.MATERIAL_NEON -> 272
@@ -408,19 +448,14 @@ object RobloxPlaceBinarySerializer {
         else -> 0
     }
 
-    private fun zigZag32(value: Int): Int = (value shl 1) xor (value shr 31)
-
-    private fun encodeFloat32(value: Float): Int = Integer.rotateLeft(value.toRawBits(), 1)
-
-    private data class InstanceRecord(
-        val id: Int,
+    private class InstanceRecord(
         val className: String,
         val name: String,
-        val parentId: Int,
-        val props: MutableMap<String, Any>
-    )
-
-    private data class Color3Value(val r: Float, val g: Float, val b: Float)
+        val parent: InstanceRecord?,
+        val props: MutableMap<String, Any> = linkedMapOf()
+    ) {
+        var referent: Int = -1
+    }
 
     private data class CFrameValue(val position: Vector3, val rotation: FloatArray)
 
@@ -461,19 +496,58 @@ object RobloxPlaceBinarySerializer {
             writeBytes(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putFloat(value).array())
         }
 
-        fun writeInterleavedUInt32(values: IntArray) {
+        fun writeFloat64LE(value: Double) {
+            writeBytes(ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putDouble(value).array())
+        }
+
+        /**
+         * Writes int32 values as big-endian, byte-interleaved.
+         * [zigzag] applies zigzag encoding (referents, Int32 props).
+         * [accumulate] converts values to delta-from-previous first (referent arrays).
+         */
+        fun writeInterleavedInts(values: IntArray, zigzag: Boolean, accumulate: Boolean = false) {
             if (values.isEmpty()) return
-            val temp = ByteArray(values.size * 4)
-            values.forEachIndexed { index, value ->
-                val base = index * 4
-                temp[base] = ((value ushr 24) and 0xFF).toByte()
-                temp[base + 1] = ((value ushr 16) and 0xFF).toByte()
-                temp[base + 2] = ((value ushr 8) and 0xFF).toByte()
-                temp[base + 3] = (value and 0xFF).toByte()
+            val encoded = IntArray(values.size)
+            var last = 0
+            for (i in values.indices) {
+                var v = values[i]
+                if (accumulate) {
+                    val delta = v - last
+                    last = v
+                    v = delta
+                }
+                encoded[i] = if (zigzag) (v shl 1) xor (v shr 31) else v
             }
+            writeInterleaved(encoded)
+        }
+
+        /** Writes int64 values as zigzag + big-endian + byte-interleaved. */
+        fun writeInterleavedInt64(values: LongArray) {
+            if (values.isEmpty()) return
+            val bytes = ByteArray(values.size * 8)
+            values.forEachIndexed { index, value ->
+                val encoded = (value shl 1) xor (value shr 63)
+                val base = index * 8
+                for (b in 0 until 8) {
+                    bytes[base + b] = (encoded ushr (56 - b * 8)).toByte()
+                }
+            }
+            repeat(8) { byteIndex ->
+                values.indices.forEach { index -> writeUInt8(bytes[index * 8 + byteIndex].toInt()) }
+            }
+        }
+
+        /** Writes floats with the Roblox float transform (rotl(bits, 1)), big-endian, interleaved. */
+        fun writeInterleavedFloats(values: FloatArray) {
+            if (values.isEmpty()) return
+            val encoded = IntArray(values.size) { i -> Integer.rotateLeft(values[i].toRawBits(), 1) }
+            writeInterleaved(encoded)
+        }
+
+        private fun writeInterleaved(encoded: IntArray) {
             repeat(4) { byteIndex ->
-                values.indices.forEach { index ->
-                    writeUInt8(temp[index * 4 + byteIndex].toInt())
+                encoded.forEach { value ->
+                    writeUInt8((value ushr (24 - byteIndex * 8)) and 0xFF)
                 }
             }
         }
@@ -483,26 +557,66 @@ object RobloxPlaceBinarySerializer {
 
     private val MAGIC = byteArrayOf(0x3C, 0x72, 0x6F, 0x62, 0x6C, 0x6F, 0x78, 0x21)
     private val SIGNATURE = byteArrayOf(0x89.toByte(), 0xFF.toByte(), 0x0D, 0x0A, 0x1A, 0x0A)
+
     private val SERVICE_CLASSES = setOf(
         "Workspace",
+        "Players",
         "Lighting",
+        "ReplicatedFirst",
         "ReplicatedStorage",
         "ServerScriptService",
         "ServerStorage",
         "StarterGui",
         "StarterPack",
+        "StarterPlayer",
         "Teams",
         "SoundService",
         "Chat",
-        "Players",
-        "ReplicatedFirst"
+        "MaterialService"
     )
+
+    // Axis-aligned rotation matrices and their special orientation IDs (rbxfile spec).
+    private val CFRAME_SPECIAL_IDS = intArrayOf(
+        0x02, 0x03, 0x05, 0x06, 0x07, 0x09, 0x0A, 0x0C, 0x0D, 0x0E, 0x10, 0x11,
+        0x14, 0x15, 0x17, 0x18, 0x19, 0x1B, 0x1C, 0x1E, 0x1F, 0x20, 0x22, 0x23
+    )
+    private val CFRAME_SPECIAL_MATRICES = arrayOf(
+        floatArrayOf(+1f, +0f, +0f, +0f, +1f, +0f, +0f, +0f, +1f),
+        floatArrayOf(+1f, +0f, +0f, +0f, +0f, -1f, +0f, +1f, +0f),
+        floatArrayOf(+1f, +0f, +0f, +0f, -1f, +0f, +0f, +0f, -1f),
+        floatArrayOf(+1f, +0f, +0f, +0f, +0f, +1f, +0f, -1f, +0f),
+        floatArrayOf(+0f, +1f, +0f, +1f, +0f, +0f, +0f, +0f, -1f),
+        floatArrayOf(+0f, +0f, +1f, +1f, +0f, +0f, +0f, +1f, +0f),
+        floatArrayOf(+0f, -1f, +0f, +1f, +0f, +0f, +0f, +0f, +1f),
+        floatArrayOf(+0f, +0f, -1f, +1f, +0f, +0f, +0f, -1f, +0f),
+        floatArrayOf(+0f, +1f, +0f, +0f, +0f, +1f, +1f, +0f, +0f),
+        floatArrayOf(+0f, +0f, -1f, +0f, +1f, +0f, +1f, +0f, +0f),
+        floatArrayOf(+0f, -1f, +0f, +0f, +0f, -1f, +1f, +0f, +0f),
+        floatArrayOf(+0f, +0f, +1f, +0f, -1f, +0f, +1f, +0f, +0f),
+        floatArrayOf(-1f, +0f, +0f, +0f, +1f, +0f, +0f, +0f, -1f),
+        floatArrayOf(-1f, +0f, +0f, +0f, +0f, +1f, +0f, +1f, +0f),
+        floatArrayOf(-1f, +0f, +0f, +0f, -1f, +0f, +0f, +0f, +1f),
+        floatArrayOf(-1f, +0f, +0f, +0f, +0f, -1f, +0f, -1f, +0f),
+        floatArrayOf(+0f, +1f, +0f, -1f, +0f, +0f, +0f, +0f, +1f),
+        floatArrayOf(+0f, +0f, -1f, -1f, +0f, +0f, +0f, +1f, +0f),
+        floatArrayOf(+0f, -1f, +0f, -1f, +0f, +0f, +0f, +0f, -1f),
+        floatArrayOf(+0f, +0f, +1f, -1f, +0f, +0f, +0f, -1f, +0f),
+        floatArrayOf(+0f, +1f, +0f, +0f, +0f, -1f, -1f, +0f, +0f),
+        floatArrayOf(+0f, +0f, +1f, +0f, +1f, +0f, -1f, +0f, +0f),
+        floatArrayOf(+0f, -1f, +0f, +0f, +0f, +1f, -1f, +0f, +0f),
+        floatArrayOf(+0f, +0f, -1f, +0f, -1f, +0f, -1f, +0f, +0f)
+    )
+
     private const val TYPE_STRING = 0x01
     private const val TYPE_BOOL = 0x02
     private const val TYPE_INT32 = 0x03
     private const val TYPE_FLOAT32 = 0x04
-    private const val TYPE_COLOR3 = 0x0C
+    private const val TYPE_DOUBLE = 0x05
+    private const val TYPE_PHYSICALPROPS = 0x19
+    private const val TYPE_COLOR3UINT8 = 0x1A
     private const val TYPE_VECTOR3 = 0x0E
     private const val TYPE_CFRAME = 0x10
     private const val TYPE_ENUM = 0x12
+    private const val TYPE_INT64 = 0x1B
+    private const val TYPE_UNIQUEID = 0x1F
 }

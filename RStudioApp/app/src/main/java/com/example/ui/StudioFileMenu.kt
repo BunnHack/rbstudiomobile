@@ -38,6 +38,7 @@ fun StudioMenuBar(
     onOpenFile: () -> Unit,
     onClosePlace: () -> Unit,
     onSave: () -> Unit,
+    onExportRbxl: () -> Unit,
     onPublish: () -> Unit,
     onGameSettings: () -> Unit,
     onGenericAction: (String) -> Unit
@@ -96,6 +97,10 @@ fun StudioMenuBar(
                     onGenericAction("Export as .obj is not implemented.")
                 }
                 FileMenuDivider()
+                FileMenuItem("Export as .rbxl", "") {
+                    fileExpanded = false
+                    onExportRbxl()
+                }
                 FileMenuItem("Save to File", "") {
                     fileExpanded = false
                     onSave()

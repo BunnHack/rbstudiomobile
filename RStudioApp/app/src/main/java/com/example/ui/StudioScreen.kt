@@ -190,6 +190,35 @@ fun StudioScreen(viewModel: StudioViewModel) {
         ))
     }
 
+    // File saver for exporting the active place as a binary .rbxl file.
+    var pendingRbxlExport by remember { mutableStateOf<ByteArray?>(null) }
+    val rbxlExportLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri ->
+        val bytes = pendingRbxlExport
+        pendingRbxlExport = null
+        if (uri != null && bytes != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(bytes)
+                } ?: error("Could not open output stream")
+            }.onSuccess {
+                viewModel.logSystem("● Exported ${bytes.size} bytes to .rbxl file.")
+            }.onFailure {
+                viewModel.logSystem("❌ Failed to export .rbxl: ${it.message}")
+            }
+        }
+    }
+    val exportActivePlaceAsRbxl = {
+        val export = viewModel.exportActivePlaceAsRbxl()
+        if (export == null) {
+            viewModel.logSystem("❌ Export failed: no active place is open.")
+        } else {
+            pendingRbxlExport = export.second
+            rbxlExportLauncher.launch(export.first)
+        }
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -204,6 +233,7 @@ fun StudioScreen(viewModel: StudioViewModel) {
                 onOpenFile = openRobloxFilePicker,
                 onClosePlace = { viewModel.closePlace() },
                 onSave = { viewModel.savePlace() },
+                onExportRbxl = exportActivePlaceAsRbxl,
                 onPublish = { showPublishDialog = true },
                 onGameSettings = { showGameSettings = true },
                 onGenericAction = { viewModel.logSystem("File: $it") }
