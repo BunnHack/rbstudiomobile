@@ -24,6 +24,7 @@ import io.github.sceneview.node.CubeNode
 import io.github.sceneview.node.PlaneNode
 import io.github.sceneview.node.SphereNode
 import io.github.sceneview.node.CylinderNode
+import io.github.sceneview.node.LineNode
 import io.github.sceneview.rememberCameraManipulator
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberEngine
@@ -112,9 +113,18 @@ fun StudioViewport(
         cameraNode = cameraNode,
         // Strict per-node placement — our parts are authored in world space.
         autoCenterContent = false,
-        // Orbit/pan/zoom camera gestures. Without this the camera is frozen because we
-        // override cameraNode and never pass a manipulator.
-        cameraManipulator = rememberCameraManipulator(),
+        // Orbit/pan/zoom camera gestures. Default orbitSpeed (0.003) feels far too
+        // slow on a phone, so build the manipulator with a faster orbit + zoom.
+        cameraManipulator = rememberCameraManipulator(
+            creator = {
+                io.github.sceneview.gesture.CameraGestureDetector.DefaultCameraManipulator(
+                    com.google.android.filament.utils.Manipulator.Builder()
+                        .orbitSpeed(0.008f, 0.008f)
+                        .zoomSpeed(0.12f)
+                        .build(com.google.android.filament.utils.Manipulator.Mode.ORBIT)
+                )
+            }
+        ),
         onTouchEvent = { event, hitResult ->
             if (event.action == MotionEvent.ACTION_UP) {
                 val partId = hitResult?.node?.name?.removePrefix("part:")
@@ -131,6 +141,7 @@ fun StudioViewport(
                 part = part,
                 isSelected = part.id == selectedPart?.id,
                 activeTool = activeTool,
+                onSelect = { viewModel.selectPart(part) },
                 onTransformEdited = { updated -> viewModel.updatePartProperty(updated) }
             )
         }
@@ -156,6 +167,7 @@ private fun SceneScope.PartNode(
     part: Part,
     isSelected: Boolean,
     activeTool: String,
+    onSelect: () -> Unit,
     onTransformEdited: (Part) -> Unit
 ) {
     val material = remember(part.colorHex, part.transparency) {
@@ -170,22 +182,21 @@ private fun SceneScope.PartNode(
     val rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
     val scale = Scale(part.size.x, part.size.y, part.size.z)
 
-    // Editing: the selected part becomes gesture-editable in the active tool's mode.
-    // When the user drags (move/rotate/scale gestures), the node's transform changes
-    // and onTransformEdited writes it back into the ViewModel.
+    // Live-editable transform state. Position/rotation/scale are State-backed so the
+    // gesture edits (which mutate node.position etc.) are reflected without fighting
+    // the part's immutable props; the ViewModel is only written back on gesture end.
     val editConfig: io.github.sceneview.node.Node.() -> Unit = {
         name = "part:${part.id}"
-        if (isSelected) {
-            when (activeTool) {
-                "MOVE" -> { isEditable = true; isPositionEditable = true; isRotationEditable = false; isScaleEditable = false }
-                "ROTATE" -> { isEditable = true; isPositionEditable = false; isRotationEditable = true; isScaleEditable = false }
-                "SCALE" -> { isEditable = true; isPositionEditable = false; isRotationEditable = false; isScaleEditable = true }
-                else -> { isEditable = false }
-            }
-        } else {
-            isEditable = false
-        }
-        // Write the dragged transform back to the ViewModel.
+        // Tap selects this part.
+        onSingleTapUp = { onSelect(); true }
+        // Editing: enable only the active tool's gesture for the selected part.
+        isEditable = isSelected && activeTool != "SELECT"
+        isPositionEditable = isSelected && activeTool == "MOVE"
+        isRotationEditable = isSelected && activeTool == "ROTATE"
+        isScaleEditable = isSelected && activeTool == "SCALE"
+        // Write the dragged transform back to the ViewModel when the gesture ends, and
+        // also live-sync during editing so the properties panel updates while dragging.
+        onEditingChanged = { onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
         onMoveEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
         onRotateEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
         onScaleEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
@@ -347,6 +358,7 @@ private fun SceneScope.DecalNode(
     )
 }
 
+/** Selection highlight: 12 cyan edge lines around the part's bounding box. */
 @Composable
 private fun SceneScope.SelectionNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
@@ -354,17 +366,35 @@ private fun SceneScope.SelectionNode(
 ) {
     val material = remember {
         materialLoader.createUnlitColorInstance(
-            dev.romainguy.kotlin.math.Float4(0.0f, 0.62f, 1.0f, 0.25f)
+            dev.romainguy.kotlin.math.Float4(0.0f, 0.7f, 1.0f, 1.0f)
         )
     }
-    CubeNode(
-        size = Size(1f, 1f, 1f),
-        materialInstance = material,
-        position = Position(part.position.x, part.position.y, part.position.z),
-        rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
-        scale = Scale(part.size.x * 1.06f, part.size.y * 1.06f, part.size.z * 1.06f),
-        apply = { isHittable = false; isTouchable = false }
+    // A slightly oversized unit box's 12 edges, centered on the part.
+    val h = 0.53f
+    val corners = listOf(
+        Position(-h, -h, -h), Position(h, -h, -h), Position(h, -h, h), Position(-h, -h, h), // bottom
+        Position(-h, h, -h), Position(h, h, -h), Position(h, h, h), Position(-h, h, h)      // top
     )
+    val edges = listOf(
+        0 to 1, 1 to 2, 2 to 3, 3 to 0,   // bottom loop
+        4 to 5, 5 to 6, 6 to 7, 7 to 4,   // top loop
+        0 to 4, 1 to 5, 2 to 6, 3 to 7    // verticals
+    )
+    val center = Position(part.position.x, part.position.y, part.position.z)
+    val rot = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
+    val scl = Scale(part.size.x, part.size.y, part.size.z)
+
+    edges.forEach { (a, b) ->
+        LineNode(
+            start = corners[a],
+            end = corners[b],
+            materialInstance = material,
+            position = center,
+            rotation = rot,
+            scale = scl,
+            apply = { isHittable = false; isTouchable = false }
+        )
+    }
 }
 
 private fun colorR(hex: String): Float = ((parseHex(hex) shr 16) and 0xFF) / 255f

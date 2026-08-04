@@ -6,9 +6,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -127,44 +129,50 @@ private fun CodeEditorPane(
     }
 
     // Gutter + code scroll vertically TOGETHER on one shared ScrollState, so the line
-    // numbers can never drift from the text. The code field wraps its full content
-    // height (no LazyColumn / no heightIn(min)), which is what made earlier versions
-    // clip to a fixed number of lines.
+    // numbers can never drift from the text. The Row is forced to at least the pane's
+    // measured height so short files still fill the editor (otherwise the Row only
+    // wrapped the 2-3 content lines and the rest of the pane stayed gutter-less).
     val sharedVerticalScroll = rememberScrollState()
-    Row(
-        modifier = modifier
-            .fillMaxSize()
-            .background(EditorBackground)
-            .verticalScroll(sharedVerticalScroll)
+    androidx.compose.foundation.layout.BoxWithConstraints(
+        modifier = modifier.fillMaxSize().background(EditorBackground)
     ) {
-        Text(
-            text = lineNumbers,
-            color = LineNumberText,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            lineHeight = 19.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+        val paneHeight = maxHeight
+        Row(
             modifier = Modifier
-                .width(43.dp)
-                .background(LineGutterBackground)
-                .padding(top = 8.dp, end = 8.dp)
-        )
-
-        BasicTextField(
-            value = code,
-            onValueChange = onCodeChange,
-            cursorBrush = SolidColor(Color(0xFF4FB2FF)),
-            textStyle = TextStyle(
-                color = CodeText,
+                .fillMaxWidth()
+                .heightIn(min = paneHeight)
+                .verticalScroll(sharedVerticalScroll)
+        ) {
+            Text(
+                text = lineNumbers,
+                color = LineNumberText,
                 fontFamily = FontFamily.Monospace,
                 fontSize = 13.sp,
-                lineHeight = 19.sp
-            ),
-            modifier = Modifier
-                .horizontalScroll(horizontalScroll)
-                .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
-                .widthIn(min = 2000.dp)
-        )
+                lineHeight = 19.sp,
+                textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                modifier = Modifier
+                    .width(43.dp)
+                    .fillMaxHeight()
+                    .background(LineGutterBackground)
+                    .padding(top = 8.dp, end = 8.dp)
+            )
+
+            BasicTextField(
+                value = code,
+                onValueChange = onCodeChange,
+                cursorBrush = SolidColor(Color(0xFF4FB2FF)),
+                textStyle = TextStyle(
+                    color = CodeText,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp
+                ),
+                modifier = Modifier
+                    .weight(1f)
+                    .horizontalScroll(horizontalScroll)
+                    .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
+            )
+        }
     }
 }
 
