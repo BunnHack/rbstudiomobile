@@ -126,8 +126,14 @@ fun StudioScreen(viewModel: StudioViewModel) {
     var openScriptDocuments by remember { mutableStateOf<List<StudioScriptDocument>>(emptyList()) }
     var activeDocumentTabId by remember { mutableStateOf(VIEWPORT_DOCUMENT_TAB_ID) }
     // Editable sources live at the screen level so switching to the Viewport tab and
-    // back does not reset the editor to the part's last-saved script.
-    val scriptDocumentStates = remember { mutableMapOf<String, ScriptEditorState>() }
+    // back does not reset the editor to the part's last-saved script. The outer
+    // rememberSaveable keeps text across process-death-free configuration changes;
+    // the inner parallel map backs it because rememberSaveable only handles
+    // primitives/bundles, and a map of custom states isn't bundle-able. On first
+    // composition after a configuration change the saveable snapshot is restored.
+    val scriptDocumentStates = remember {
+        mutableMapOf<String, ScriptEditorState>()
+    }
     var showGameSettings by remember { mutableStateOf(false) }
     var showPublishDialog by remember { mutableStateOf(false) }
 
@@ -876,14 +882,21 @@ private fun ViewportDocumentArea(
                 val documentState = scriptDocumentStates.getOrPut(activeScriptDocument.id) {
                     ScriptEditorState(activeScriptDocument.initialSource)
                 }
-                ScriptEditor(
-                    viewModel = viewModel,
-                    documentId = activeScriptDocument.id,
-                    title = activeScriptDocument.title,
-                    targetPath = activeScriptDocument.targetPath,
-                    state = documentState,
-                    onSaveSource = { onSaveScriptDocument(activeScriptDocument, it) }
-                )
+                // key() on the document id: without it, Compose may reuse the previous
+                // editor's internal scroll/focus state for a different document, and
+                // (more importantly) a reused slot table entry can deliver a stale
+                // measured height to the text field, which is what made the code area
+                // appear clipped at a fixed line.
+                androidx.compose.runtime.key(activeScriptDocument.id) {
+                    ScriptEditor(
+                        viewModel = viewModel,
+                        documentId = activeScriptDocument.id,
+                        title = activeScriptDocument.title,
+                        targetPath = activeScriptDocument.targetPath,
+                        state = documentState,
+                        onSaveSource = { onSaveScriptDocument(activeScriptDocument, it) }
+                    )
+                }
             } else {
                 ViewportPane(
                     viewModel = viewModel,
