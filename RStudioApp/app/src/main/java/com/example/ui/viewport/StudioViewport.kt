@@ -24,6 +24,7 @@ import io.github.sceneview.node.CubeNode
 import io.github.sceneview.node.PlaneNode
 import io.github.sceneview.node.SphereNode
 import io.github.sceneview.node.CylinderNode
+import io.github.sceneview.rememberCameraManipulator
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
@@ -111,12 +112,17 @@ fun StudioViewport(
         cameraNode = cameraNode,
         // Strict per-node placement — our parts are authored in world space.
         autoCenterContent = false,
+        // Orbit/pan/zoom camera gestures. Without this the camera is frozen because we
+        // override cameraNode and never pass a manipulator.
+        cameraManipulator = rememberCameraManipulator(),
         onTouchEvent = { event, hitResult ->
             if (event.action == MotionEvent.ACTION_UP) {
                 val partId = hitResult?.node?.name?.removePrefix("part:")
                 viewModel.selectPart(parts.firstOrNull { it.id == partId })
             }
-            true
+            // Return false so the gesture detector still receives the event and camera
+            // orbit/pan/zoom keep working (returning true would consume every touch).
+            false
         }
     ) {
         parts.forEach { part ->

@@ -2,6 +2,7 @@ package com.example.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -120,57 +121,50 @@ private fun CodeEditorPane(
     onCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val horizontalScroll = rememberScrollState()
     val lineNumbers = remember(lineCount) {
         (1..lineCount).joinToString("\n") { it.toString() }
     }
 
-    // LazyColumn for the code area: line gutter rows and the text field are items in
-    // one vertically-scrolling list, so the field is never hard-clipped to a fixed
-    // viewport height (the "only 3 lines visible" bug came from a Row+heightIn(min)
-    // measuring the field against the leftover viewport height).
-    androidx.compose.foundation.lazy.LazyColumn(
-        state = listState,
+    // Gutter + code scroll vertically TOGETHER on one shared ScrollState, so the line
+    // numbers can never drift from the text. The code field wraps its full content
+    // height (no LazyColumn / no heightIn(min)), which is what made earlier versions
+    // clip to a fixed number of lines.
+    val sharedVerticalScroll = rememberScrollState()
+    Row(
         modifier = modifier
             .fillMaxSize()
             .background(EditorBackground)
+            .verticalScroll(sharedVerticalScroll)
     ) {
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(horizontalScroll)
-            ) {
-                Text(
-                    text = lineNumbers,
-                    color = LineNumberText,
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    lineHeight = 19.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
-                    modifier = Modifier
-                        .width(43.dp)
-                        .background(LineGutterBackground)
-                        .padding(top = 8.dp, end = 8.dp)
-                )
+        Text(
+            text = lineNumbers,
+            color = LineNumberText,
+            fontFamily = FontFamily.Monospace,
+            fontSize = 13.sp,
+            lineHeight = 19.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier
+                .width(43.dp)
+                .background(LineGutterBackground)
+                .padding(top = 8.dp, end = 8.dp)
+        )
 
-                BasicTextField(
-                    value = code,
-                    onValueChange = onCodeChange,
-                    cursorBrush = SolidColor(Color(0xFF4FB2FF)),
-                    textStyle = TextStyle(
-                        color = CodeText,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        lineHeight = 19.sp
-                    ),
-                    modifier = Modifier
-                        .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
-                        .widthIn(min = 2000.dp)
-                )
-            }
-        }
+        BasicTextField(
+            value = code,
+            onValueChange = onCodeChange,
+            cursorBrush = SolidColor(Color(0xFF4FB2FF)),
+            textStyle = TextStyle(
+                color = CodeText,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 13.sp,
+                lineHeight = 19.sp
+            ),
+            modifier = Modifier
+                .horizontalScroll(horizontalScroll)
+                .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
+                .widthIn(min = 2000.dp)
+        )
     }
 }
 
