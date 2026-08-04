@@ -5,22 +5,32 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import com.example.models.Part
 import com.example.viewmodels.StudioViewModel
+import com.google.android.filament.Texture
+import io.github.sceneview.SceneScope
 import io.github.sceneview.SceneView
+import io.github.sceneview.geometries.UvScale
+import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Rotation
+import io.github.sceneview.math.Scale
 import io.github.sceneview.math.Size
 import io.github.sceneview.node.CubeNode
-import io.github.sceneview.node.CylinderNode
+import io.github.sceneview.node.PlaneNode
 import io.github.sceneview.node.SphereNode
+import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -32,9 +42,11 @@ import kotlin.math.sin
  * switching tabs" class of bugs we hit with kool's process-wide singleton context
  * does not exist here.
  *
- * Each [Part] becomes a primitive node (cube / sphere / cylinder) declared inside the
- * SceneView content DSL. Tapping a node selects the backing part. The camera is an
- * orbit rig driven by the ViewModel's yaw/pitch/zoom.
+ *  - Each [Part] becomes a primitive node (cube / sphere / cylinder / wedge-cube).
+ *  - Decals & Textures (Roblox image assets) render as textured [PlaneNode]s hugging
+ *    the part face, loaded via [RobloxTextureLoader].
+ *  - The selected part gets a thin selection plane overlay.
+ *  - Tap a node to select the backing part; orbit camera follows ViewModel yaw/pitch/zoom.
  */
 @Composable
 fun StudioViewport(
@@ -45,13 +57,38 @@ fun StudioViewport(
     val yaw by viewModel.cameraYaw.collectAsState()
     val pitch by viewModel.cameraPitch.collectAsState()
     val zoom by viewModel.cameraZoom.collectAsState()
+    val selectedPart by viewModel.selectedPart.collectAsState()
+    val activeTool by viewModel.activeTool.collectAsState()
+    val nodes by viewModel.explorerNodes.collectAsState()
+    val roblosecurityCookie by viewModel.roblosecurityCookie.collectAsState()
+    val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
 
     val engine = rememberEngine()
     val modelLoader = rememberModelLoader(engine)
     val materialLoader = rememberMaterialLoader(engine)
     val environmentLoader = rememberEnvironmentLoader(engine)
-
     val cameraNode = rememberCameraNode(engine)
+
+    val scope = rememberCoroutineScope()
+    val textureLoader = remember { RobloxTextureLoader(engine, OkHttpClient()) }
+    // Loaded decal textures by "uri|repeat"; populated asynchronously.
+    val decalTextures = remember { mutableStateMapOf<String, Texture>() }
+
+    LaunchedEffect(roblosecurityCookie) {
+        textureLoader.roblosecurityCookie = roblosecurityCookie
+    }
+
+    // Kick off async texture loads for any decal that isn't loaded yet.
+    decals.forEach { decal ->
+        val key = "${decal.textureUri}|${decal.isTexture}"
+        if (!decalTextures.containsKey(key)) {
+            scope.launch {
+                textureLoader.load(decal.textureUri, decal.isTexture)?.let { tex ->
+                    decalTextures[key] = tex
+                }
+            }
+        }
+    }
 
     // Orbit camera from ViewModel state.
     LaunchedEffect(yaw, pitch, zoom) {
@@ -83,43 +120,245 @@ fun StudioViewport(
         }
     ) {
         parts.forEach { part ->
-            val material = remember(part.colorHex, part.transparency) {
-                materialLoader.createColorInstance(
-                    dev.romainguy.kotlin.math.Float4(
-                        colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex),
-                        1f - part.transparency.coerceIn(0f, 1f)
-                    )
-                )
-            }
-            when (part.shape) {
-                Part.SHAPE_SPHERE -> SphereNode(
-                    radius = 0.5f,
-                    materialInstance = material,
-                    position = Position(part.position.x, part.position.y, part.position.z),
-                    rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
-                    scale = Size(part.size.x, part.size.y, part.size.z),
-                    apply = { name = "part:${part.id}" }
-                )
-                Part.SHAPE_CYLINDER -> CylinderNode(
-                    radius = 0.5f,
-                    height = 1f,
-                    materialInstance = material,
-                    position = Position(part.position.x, part.position.y, part.position.z),
-                    rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
-                    scale = Size(part.size.x, part.size.y, part.size.z),
-                    apply = { name = "part:${part.id}" }
-                )
-                else -> CubeNode(
-                    size = Size(1f, 1f, 1f),
-                    materialInstance = material,
-                    position = Position(part.position.x, part.position.y, part.position.z),
-                    rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
-                    scale = Size(part.size.x, part.size.y, part.size.z),
-                    apply = { name = "part:${part.id}" }
-                )
-            }
+            PartNode(
+                materialLoader = materialLoader,
+                part = part,
+                isSelected = part.id == selectedPart?.id,
+                activeTool = activeTool,
+                onTransformEdited = { updated -> viewModel.updatePartProperty(updated) }
+            )
+        }
+
+        // Decal / Texture overlays on part faces.
+        val partsById = parts.associateBy { it.id }
+        decals.sortedBy { it.zIndex }.forEach { decal ->
+            val part = partsById[decal.parentPartId] ?: return@forEach
+            val tex = decalTextures["${decal.textureUri}|${decal.isTexture}"] ?: return@forEach
+            DecalNode(materialLoader, decal, part, tex)
+        }
+
+        // Selection highlight: a transparent cyan cube slightly larger than the part.
+        selectedPart?.let { part ->
+            SelectionNode(materialLoader, part)
         }
     }
+}
+
+@Composable
+private fun SceneScope.PartNode(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    part: Part,
+    isSelected: Boolean,
+    activeTool: String,
+    onTransformEdited: (Part) -> Unit
+) {
+    val material = remember(part.colorHex, part.transparency) {
+        materialLoader.createColorInstance(
+            dev.romainguy.kotlin.math.Float4(
+                colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex),
+                1f - part.transparency.coerceIn(0f, 1f)
+            )
+        )
+    }
+    val position = Position(part.position.x, part.position.y, part.position.z)
+    val rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
+    val scale = Scale(part.size.x, part.size.y, part.size.z)
+
+    // Editing: the selected part becomes gesture-editable in the active tool's mode.
+    // When the user drags (move/rotate/scale gestures), the node's transform changes
+    // and onTransformEdited writes it back into the ViewModel.
+    val editConfig: io.github.sceneview.node.Node.() -> Unit = {
+        name = "part:${part.id}"
+        if (isSelected) {
+            when (activeTool) {
+                "MOVE" -> { isEditable = true; isPositionEditable = true; isRotationEditable = false; isScaleEditable = false }
+                "ROTATE" -> { isEditable = true; isPositionEditable = false; isRotationEditable = true; isScaleEditable = false }
+                "SCALE" -> { isEditable = true; isPositionEditable = false; isRotationEditable = false; isScaleEditable = true }
+                else -> { isEditable = false }
+            }
+        } else {
+            isEditable = false
+        }
+        // Write the dragged transform back to the ViewModel.
+        onMoveEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
+        onRotateEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
+        onScaleEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
+    }
+
+    when (part.shape) {
+        Part.SHAPE_SPHERE -> SphereNode(
+            radius = 0.5f,
+            materialInstance = material,
+            position = position,
+            rotation = rotation,
+            scale = scale,
+            apply = editConfig
+        )
+        Part.SHAPE_CYLINDER -> CylinderNode(
+            radius = 0.5f,
+            height = 1f,
+            materialInstance = material,
+            position = position,
+            rotation = rotation,
+            scale = scale,
+            apply = editConfig
+        )
+        Part.SHAPE_WEDGE -> WedgeNode(
+            engine = engine,
+            materialInstance = material,
+            position = position,
+            rotation = rotation,
+            scale = scale,
+            apply = editConfig
+        )
+        else -> CubeNode(
+            size = Size(1f, 1f, 1f),
+            materialInstance = material,
+            position = position,
+            rotation = rotation,
+            scale = scale,
+            apply = editConfig
+        )
+    }
+}
+
+/**
+ * A wedge (triangular prism): a 1x1x1 box with the top-back edge collapsed onto the
+ * top-front edge, built with SceneView's Geometry builder. Scaled by the part's size.
+ */
+@Composable
+private fun SceneScope.WedgeNode(
+    engine: com.google.android.filament.Engine,
+    materialInstance: com.google.android.filament.MaterialInstance,
+    position: Position,
+    rotation: Rotation,
+    scale: Scale,
+    apply: io.github.sceneview.node.MeshNode.() -> Unit
+) {
+    val geometry = remember(engine) { buildWedgeGeometry(engine) }
+    MeshNode(
+        primitiveType = com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES,
+        vertexBuffer = geometry.vertexBuffer,
+        indexBuffer = geometry.indexBuffer,
+        boundingBox = geometry.boundingBox,
+        materialInstance = materialInstance,
+        apply = {
+            this.position = position
+            this.rotation = rotation
+            this.scale = scale
+            apply()
+        }
+    )
+}
+
+private fun buildWedgeGeometry(engine: com.google.android.filament.Engine): io.github.sceneview.geometries.Geometry {
+    // Unit wedge: square base, vertical front face, slanted back->front-top face.
+    // x: left(-)/right(+), y: down(-)/up(+), z: front(-)/back(+)
+    val v = listOf(
+        Position(-0.5f, -0.5f, -0.5f), // 0 front-bottom-left
+        Position(0.5f, -0.5f, -0.5f),  // 1 front-bottom-right
+        Position(0.5f, -0.5f, 0.5f),   // 2 back-bottom-right
+        Position(-0.5f, -0.5f, 0.5f),  // 3 back-bottom-left
+        Position(-0.5f, 0.5f, -0.5f),  // 4 front-top-left
+        Position(0.5f, 0.5f, -0.5f)    // 5 front-top-right
+    )
+    val triangles = listOf(
+        0, 2, 1, 0, 3, 2,       // bottom
+        0, 1, 5, 0, 5, 4,       // front
+        1, 2, 5,                // right
+        3, 0, 4,                // left
+        3, 4, 5, 3, 5, 2        // slanted top (back-bottom -> front-top)
+    )
+    return io.github.sceneview.geometries.Geometry.Builder(
+        com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES
+    )
+        .vertices(v.map { io.github.sceneview.geometries.Geometry.Vertex(position = it) })
+        .indices(triangles)
+        .build(engine)
+}
+
+/** Copy this part with a new world transform read back from the edited render node. */
+private fun Part.withTransformFrom(
+    worldPosition: Position,
+    rotation: Rotation,
+    scale: Scale
+): Part = copy(
+    position = com.example.models.Vector3(worldPosition.x, worldPosition.y, worldPosition.z),
+    rotation = com.example.models.Vector3(rotation.x, rotation.y, rotation.z),
+    size = com.example.models.Vector3(
+        (size.x * scale.x).coerceAtLeast(0.05f),
+        (size.y * scale.y).coerceAtLeast(0.05f),
+        (size.z * scale.z).coerceAtLeast(0.05f)
+    )
+)
+
+@Composable
+private fun SceneScope.DecalNode(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    decal: DecalRenderItem,
+    part: Part,
+    texture: Texture
+) {
+    // Face normal + in-plane size derived from the part's local axes.
+    val (normal, quadSize, faceOffset) = when (decal.face.lowercase()) {
+        "top" -> Triple(Direction(0f, 1f, 0f), Size(part.size.x, part.size.z), part.size.y / 2f)
+        "bottom" -> Triple(Direction(0f, -1f, 0f), Size(part.size.x, part.size.z), part.size.y / 2f)
+        "left" -> Triple(Direction(-1f, 0f, 0f), Size(part.size.z, part.size.y), part.size.x / 2f)
+        "right" -> Triple(Direction(1f, 0f, 0f), Size(part.size.z, part.size.y), part.size.x / 2f)
+        "back" -> Triple(Direction(0f, 0f, -1f), Size(part.size.x, part.size.y), part.size.z / 2f)
+        else -> Triple(Direction(0f, 0f, 1f), Size(part.size.x, part.size.y), part.size.z / 2f) // Front
+    }
+    // Push the quad a hair off the face to avoid z-fighting.
+    val epsilon = 0.01f
+    val offset = Position(normal.x * (faceOffset + epsilon), normal.y * (faceOffset + epsilon), normal.z * (faceOffset + epsilon))
+
+    val material = remember(texture, decal.transparency, decal.colorHex) {
+        materialLoader.createTextureInstance(texture, isOpaque = decal.transparency <= 0f)
+            .apply {
+                setParameter(
+                    "color",
+                    colorR(decal.colorHex), colorG(decal.colorHex), colorB(decal.colorHex),
+                    1f - decal.transparency.coerceIn(0f, 1f)
+                )
+            }
+    }
+
+    PlaneNode(
+        size = quadSize,
+        normal = normal,
+        uvScale = UvScale(
+            if (decal.isTexture) (part.size.x / decal.studsPerTileU) else 1f,
+            if (decal.isTexture) (part.size.y / decal.studsPerTileV) else 1f
+        ),
+        materialInstance = material,
+        position = Position(
+            part.position.x + offset.x,
+            part.position.y + offset.y,
+            part.position.z + offset.z
+        ),
+        rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
+        apply = { name = "decal:${decal.id}" }
+    )
+}
+
+@Composable
+private fun SceneScope.SelectionNode(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    part: Part
+) {
+    val material = remember {
+        materialLoader.createUnlitColorInstance(
+            dev.romainguy.kotlin.math.Float4(0.0f, 0.62f, 1.0f, 0.25f)
+        )
+    }
+    CubeNode(
+        size = Size(1f, 1f, 1f),
+        materialInstance = material,
+        position = Position(part.position.x, part.position.y, part.position.z),
+        rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
+        scale = Scale(part.size.x * 1.06f, part.size.y * 1.06f, part.size.z * 1.06f),
+        apply = { isHittable = false; isTouchable = false }
+    )
 }
 
 private fun colorR(hex: String): Float = ((parseHex(hex) shr 16) and 0xFF) / 255f
