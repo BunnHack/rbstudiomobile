@@ -49,7 +49,7 @@ import com.example.toolbox.ToolboxAsset
 import com.example.toolbox.ToolboxAssetType
 import com.example.toolbox.ToolboxAssetTypes
 import com.example.toolbox.ToolboxSearchState
-import com.example.ui.kool.KoolViewport
+import com.example.ui.viewport.StudioViewport
 import com.example.viewmodels.StudioViewModel
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.ChevronDown
@@ -1019,7 +1019,7 @@ private fun ViewportPane(
     onToggleRightPanel: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
-        KoolViewport(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+        StudioViewport(viewModel = viewModel, modifier = Modifier.fillMaxSize())
         RobloxGuiOverlay(
             nodes = explorerNodes,
             selectedNodeId = selectedNode?.id,

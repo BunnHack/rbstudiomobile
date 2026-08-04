@@ -38,7 +38,7 @@ robolectric = "4.16.1"
 firebaseBom = "34.15.0"
 secretsGradlePlugin = "2.0.1"
 googleServices = "4.5.0"
-kool = "0.20.0-SNAPSHOT"
+sceneview = "4.25.0"
 androidsvg = "1.4"
 zstdJni = "1.5.6-4"
 lz4Java = "1.8.0"
@@ -90,7 +90,7 @@ robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-ai = { group = "com.google.firebase", name = "firebase-ai" }
 firebase-appcheck-recaptcha = { group = "com.google.firebase", name = "firebase-appcheck-recaptcha" }
-kool-core = { group = "de.fabmax.kool", name = "kool-core", version.ref = "kool" }
+sceneview = { group = "io.github.sceneview", name = "sceneview", version.ref = "sceneview" }
 androidsvg = { group = "com.caverock", name = "androidsvg-aar", version.ref = "androidsvg" }
 zstd-jni = { group = "com.github.luben", name = "zstd-jni", version.ref = "zstdJni" }
 lz4-java = { group = "org.lz4", name = "lz4-java", version.ref = "lz4Java" }

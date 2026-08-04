@@ -45,11 +45,13 @@ android {
     jvmToolchain(17)
   }
 
-  // The locally-built kool-core snapshot is compiled with Kotlin 2.4 while this
-  // module compiles with Kotlin 2.2 — allow the newer library metadata.
+  // SceneView is compiled with Kotlin 2.4 while this module compiles with Kotlin 2.2 —
+  // allow the newer library metadata.
   kotlin.compilerOptions {
     freeCompilerArgs.add("-Xskip-metadata-version-check")
   }
+
+
   buildFeatures {
     compose = true
     buildConfig = true
@@ -100,8 +102,8 @@ dependencies {
   implementation(libs.okhttp)
   implementation(libs.retrofit)
 
-  // kool 3D engine (real GPU 3D via OpenGL ES 3 on Android, published on Maven Central)
-  implementation(libs.kool.core)
+  // SceneView (Filament) 3D viewport — real GPU 3D via OpenGL ES / Vulkan
+  implementation(libs.sceneview)
   implementation(libs.androidsvg)
   // Roblox .rbxm/.rbxl binary format decompression
   implementation(libs.zstd.jni)

@@ -39,7 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.example.models.StudioNode
-import com.example.ui.kool.resolveRobloxTextureAssetPath
+import com.example.ui.viewport.resolveRobloxTextureAssetPath
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
