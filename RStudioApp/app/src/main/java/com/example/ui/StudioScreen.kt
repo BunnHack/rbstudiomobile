@@ -126,14 +126,8 @@ fun StudioScreen(viewModel: StudioViewModel) {
     var openScriptDocuments by remember { mutableStateOf<List<StudioScriptDocument>>(emptyList()) }
     var activeDocumentTabId by remember { mutableStateOf(VIEWPORT_DOCUMENT_TAB_ID) }
     // Editable sources live at the screen level so switching to the Viewport tab and
-    // back does not reset the editor to the part's last-saved script. The outer
-    // rememberSaveable keeps text across process-death-free configuration changes;
-    // the inner parallel map backs it because rememberSaveable only handles
-    // primitives/bundles, and a map of custom states isn't bundle-able. On first
-    // composition after a configuration change the saveable snapshot is restored.
-    val scriptDocumentStates = remember {
-        mutableMapOf<String, ScriptEditorState>()
-    }
+    // back does not reset the editor to the part's last-saved script.
+    val scriptDocumentStates = remember { mutableMapOf<String, ScriptEditorState>() }
     var showGameSettings by remember { mutableStateOf(false) }
     var showPublishDialog by remember { mutableStateOf(false) }
 
@@ -672,6 +666,12 @@ fun StudioScreen(viewModel: StudioViewModel) {
                 }
 
                 // CENTER: document tabs + 3D viewport / script editor
+                // key() on the active document tab: switching between Viewport and a
+                // script document replaces this subtree entirely, so neither the kool
+                // viewport nor a script editor can inherit a stale measured/layout
+                // state from the other (this was the remaining source of the clipped
+                // editor and of the viewport re-attaching into a half-disposed node).
+                androidx.compose.runtime.key(activeDocumentTabId) {
                 ViewportDocumentArea(
                     modifier = Modifier
                         .weight(1f)
@@ -704,6 +704,7 @@ fun StudioScreen(viewModel: StudioViewModel) {
                         }
                     }
                 )
+                }
 
                 // RIGHT SIDE BAR: Explorer Tree & Properties Inspector
                 AnimatedVisibility(
