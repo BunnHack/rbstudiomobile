@@ -82,12 +82,17 @@ fun StudioViewport(
 
     // Kick off async texture loads for any decal that isn't loaded yet.
     decals.forEach { decal ->
-        val key = "${decal.textureUri}|${decal.isTexture}"
+        val key = decal.textureUri
         if (!decalTextures.containsKey(key)) {
             scope.launch {
-                textureLoader.load(decal.textureUri, decal.isTexture)?.let { tex ->
-                    decalTextures[key] = tex
-                }
+                textureLoader.load(
+                    textureUri = decal.textureUri,
+                    repeating = decal.isTexture,
+                    tint = RobloxTextureLoader.TintColor(
+                        colorR(decal.colorHex), colorG(decal.colorHex), colorB(decal.colorHex)
+                    ),
+                    alpha = 1f - decal.transparency.coerceIn(0f, 1f)
+                )?.let { tex -> decalTextures[key] = tex }
             }
         }
     }
@@ -113,17 +118,12 @@ fun StudioViewport(
         cameraNode = cameraNode,
         // Strict per-node placement — our parts are authored in world space.
         autoCenterContent = false,
-        // Orbit/pan/zoom camera gestures. Default orbitSpeed (0.003) feels far too
-        // slow on a phone, so build the manipulator with a faster orbit + zoom.
+        // Orbit/pan/zoom camera gestures with a distance-scaled speed: the default
+        // fixed speeds feel frozen on large scenes. We scale grab (orbit/pan) and
+        // pinch-zoom deltas by the current camera-to-target distance so dragging is
+        // proportional to how far you're zoomed out.
         cameraManipulator = rememberCameraManipulator(
-            creator = {
-                io.github.sceneview.gesture.CameraGestureDetector.DefaultCameraManipulator(
-                    com.google.android.filament.utils.Manipulator.Builder()
-                        .orbitSpeed(0.008f, 0.008f)
-                        .zoomSpeed(0.12f)
-                        .build(com.google.android.filament.utils.Manipulator.Mode.ORBIT)
-                )
-            }
+            creator = { DistanceScaledCameraManipulator() }
         ),
         onTouchEvent = { event, hitResult ->
             if (event.action == MotionEvent.ACTION_UP) {
@@ -150,7 +150,7 @@ fun StudioViewport(
         val partsById = parts.associateBy { it.id }
         decals.sortedBy { it.zIndex }.forEach { decal ->
             val part = partsById[decal.parentPartId] ?: return@forEach
-            val tex = decalTextures["${decal.textureUri}|${decal.isTexture}"] ?: return@forEach
+            val tex = decalTextures[decal.textureUri] ?: return@forEach
             DecalNode(materialLoader, decal, part, tex)
         }
 
@@ -329,15 +329,13 @@ private fun SceneScope.DecalNode(
     val epsilon = 0.01f
     val offset = Position(normal.x * (faceOffset + epsilon), normal.y * (faceOffset + epsilon), normal.z * (faceOffset + epsilon))
 
-    val material = remember(texture, decal.transparency, decal.colorHex) {
+    // The textured material (opaque_textured.mat / transparent_textured.mat) only has
+    // a "texture" sampler + metallic/roughness/reflectance — no "color" or
+    // "baseColorFactor" uniform. Tint must be baked into the texture itself (done at
+    // load time in RobloxTextureLoader); do NOT call setParameter("color"/...) here,
+    // it crashes with "uniform named ... not found".
+    val material = remember(texture) {
         materialLoader.createTextureInstance(texture, isOpaque = decal.transparency <= 0f)
-            .apply {
-                setParameter(
-                    "color",
-                    colorR(decal.colorHex), colorG(decal.colorHex), colorB(decal.colorHex),
-                    1f - decal.transparency.coerceIn(0f, 1f)
-                )
-            }
     }
 
     PlaneNode(

@@ -27,19 +27,34 @@ class RobloxTextureLoader(
     var roblosecurityCookie: String = ""
 
     /** Returns a texture for [textureUri], or null while it loads asynchronously. */
-    suspend fun load(textureUri: String, repeating: Boolean): Texture? {
+    suspend fun load(
+        textureUri: String,
+        repeating: Boolean,
+        tint: TintColor? = null,
+        alpha: Float = 1f
+    ): Texture? {
         val path = resolveRobloxTextureAssetPath(textureUri) ?: return null
-        val key = "$path|repeat=$repeating"
+        val key = "$path|repeat=$repeating|tint=${tint?.packed ?: -1}|a=$alpha"
         cache[key]?.let { return it }
         if (key in missing) return null
 
-        return runCatching { loadInternal(path, repeating) }
+        return runCatching { loadInternal(path, repeating, tint, alpha) }
             .onSuccess { cache[key] = it }
             .onFailure { missing += key }
             .getOrNull()
     }
 
-    private suspend fun loadInternal(path: String, repeating: Boolean): Texture {
+    data class TintColor(val r: Float, val g: Float, val b: Float) {
+        val packed: Int
+            get() = ((r * 255).toInt() shl 16) or ((g * 255).toInt() shl 8) or (b * 255).toInt()
+    }
+
+    private suspend fun loadInternal(
+        path: String,
+        repeating: Boolean,
+        tint: TintColor?,
+        alpha: Float
+    ): Texture {
         val bitmap = withContext(Dispatchers.IO) {
             val bytes = if (isRobloxAssetDeliveryPath(path)) {
                 val assetId = path.substringAfter("id=", "").takeWhile { it.isDigit() }
@@ -51,15 +66,38 @@ class RobloxTextureLoader(
                 ?: throw IOException("Could not decode image from $path")
         }
 
-        val texture = ImageTexture.Builder()
-            .bitmap(bitmap, ImageTexture.DEFAULT_TYPE)
+        // Tint + alpha are baked into the bitmap because the textured Filament material
+        // has no color/tint uniform.
+        val processed = if (tint != null || alpha < 1f) applyTintAndAlpha(bitmap, tint, alpha) else bitmap
+
+        return ImageTexture.Builder()
+            .bitmap(processed, ImageTexture.DEFAULT_TYPE)
             .build(engine)
-        if (repeating) {
-            // Filament TextureSampler wrap default is CLAMP_TO_EDGE; decals that tile need
-            // REPEAT. Sampling is configured at material-instance level, so we leave the
-            // texture itself unmarked and rely on the sampler used in the material.
+    }
+
+    private fun applyTintAndAlpha(
+        src: android.graphics.Bitmap,
+        tint: TintColor?,
+        alpha: Float
+    ): android.graphics.Bitmap {
+        val out = src.copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+        val w = out.width
+        val h = out.height
+        val px = IntArray(w * h)
+        out.getPixels(px, 0, w, 0, 0, w, h)
+        val tr = tint?.r ?: 1f
+        val tg = tint?.g ?: 1f
+        val tb = tint?.b ?: 1f
+        for (i in px.indices) {
+            val p = px[i]
+            val a = (((p ushr 24) and 0xFF) / 255f * alpha * 255f).toInt().coerceIn(0, 255)
+            val r = (((p ushr 16) and 0xFF) * tr).toInt().coerceIn(0, 255)
+            val g = (((p ushr 8) and 0xFF) * tg).toInt().coerceIn(0, 255)
+            val b = ((p and 0xFF) * tb).toInt().coerceIn(0, 255)
+            px[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
-        return texture
+        out.setPixels(px, 0, w, 0, 0, w, h)
+        return out
     }
 
     private fun resolveRobloxImageBytes(bytes: ByteArray, visited: MutableSet<String>): ByteArray {
