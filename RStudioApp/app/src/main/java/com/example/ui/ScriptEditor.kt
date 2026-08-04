@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -121,53 +120,56 @@ private fun CodeEditorPane(
     onCodeChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // Shared scroll states: line numbers and code scroll together vertically, so the
-    // gutter can never drift out of sync with the text (previously the code scrolled
-    // inside its own Box while the gutter scrolled with the outer Row — any layout
-    // mismatch made the editor look clipped at a fixed line).
-    val verticalScroll = rememberScrollState()
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
     val horizontalScroll = rememberScrollState()
     val lineNumbers = remember(lineCount) {
         (1..lineCount).joinToString("\n") { it.toString() }
     }
 
-    Row(
+    // LazyColumn for the code area: line gutter rows and the text field are items in
+    // one vertically-scrolling list, so the field is never hard-clipped to a fixed
+    // viewport height (the "only 3 lines visible" bug came from a Row+heightIn(min)
+    // measuring the field against the leftover viewport height).
+    androidx.compose.foundation.lazy.LazyColumn(
+        state = listState,
         modifier = modifier
             .fillMaxSize()
             .background(EditorBackground)
-            .verticalScroll(verticalScroll)
     ) {
-        Text(
-            text = lineNumbers,
-            color = LineNumberText,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 13.sp,
-            lineHeight = 19.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.End,
-            modifier = Modifier
-                .width(43.dp)
-                .background(LineGutterBackground)
-                .padding(top = 8.dp, end = 8.dp)
-        )
-
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .horizontalScroll(horizontalScroll)
-                .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
-        ) {
-            BasicTextField(
-                value = code,
-                onValueChange = onCodeChange,
-                cursorBrush = SolidColor(Color(0xFF4FB2FF)),
-                textStyle = TextStyle(
-                    color = CodeText,
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(horizontalScroll)
+            ) {
+                Text(
+                    text = lineNumbers,
+                    color = LineNumberText,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 13.sp,
-                    lineHeight = 19.sp
-                ),
-                modifier = Modifier.widthIn(min = 2000.dp)
-            )
+                    lineHeight = 19.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.End,
+                    modifier = Modifier
+                        .width(43.dp)
+                        .background(LineGutterBackground)
+                        .padding(top = 8.dp, end = 8.dp)
+                )
+
+                BasicTextField(
+                    value = code,
+                    onValueChange = onCodeChange,
+                    cursorBrush = SolidColor(Color(0xFF4FB2FF)),
+                    textStyle = TextStyle(
+                        color = CodeText,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp
+                    ),
+                    modifier = Modifier
+                        .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
+                        .widthIn(min = 2000.dp)
+                )
+            }
         }
     }
 }
