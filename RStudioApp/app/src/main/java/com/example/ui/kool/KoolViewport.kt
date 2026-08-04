@@ -61,9 +61,15 @@ fun KoolViewport(
         factory = { ctx ->
             val activity = unwrapActivity(ctx)
                 ?: error("KoolViewport requires an Activity context")
-            // 1) Boot kool once per process.
+            // 1) Boot kool once per process. On a reused context (returning from a
+            //    script tab / reopening a place), scenes of previously disposed
+            //    compositions may still be staged — purge them so only this
+            //    composition's scene is ever rendered/input-routed. Without this the
+            //    very first detached scene (created before the input-leak fix) keeps
+            //    rendering forever and its dead surface shows as a black screen.
             val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid
                 ?: activity.createDefaultKoolContext()
+            kctx.scenes.clear()
             // 2) Build this composition's scene bridge and register its scene.
             val b = KoolSceneBridge(
                 onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
@@ -100,6 +106,7 @@ fun KoolViewport(
             // re-register a fresh scene bridge — otherwise zero scenes render (black).
             if (bridge == null) {
                 val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid ?: return@AndroidView
+                kctx.scenes.clear()
                 (view.parent as? ViewGroup)?.removeView(view)
                 val b = KoolSceneBridge(
                     onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
