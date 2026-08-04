@@ -231,10 +231,15 @@ class KoolSceneBridge(
         pointerListener?.let { InputStack.defaultInputHandler.pointerListeners -= it }
         pointerListener = null
         textureScope.cancel()
+        // SimpleGizmo pushes an InputStack handler in init; only release() pops it.
+        // Without this, every tab switch leaked one handler onto the global input
+        // stack and kept intercepting pointer events invisibly.
+        gizmo.release()
         if (gizmoAttached) {
             scene.removeNode(gizmo)
             gizmoAttached = false
         }
+        scene.release()
     }
 
     fun syncParts(parts: List<Part>) {
