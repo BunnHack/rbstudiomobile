@@ -15,7 +15,13 @@ import javax.microedition.khronos.egl.EGLDisplay
 class KoolSurfaceView(context: Context) : GLSurfaceView(context) {
     init {
         setEGLContextClientVersion(3)
-        preserveEGLContextOnPause = true
+        // Do NOT preserve the EGL context on pause: when this view is detached (Compose
+        // tab switch / activity pause) the surface is destroyed, and with a preserved
+        // context GLSurfaceView would NOT recreate it on re-attach — rendering then
+        // continues into a dead surface (black viewport). Letting the context be
+        // destroyed and recreated makes onSurfaceCreated fire on every attach, which
+        // is the only reliable way to resume rendering.
+        preserveEGLContextOnPause = false
         //if (numSamples > 1) {
         //    setEGLConfigChooser(KoolConfigChooser(numSamples))
         //}

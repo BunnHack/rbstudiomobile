@@ -29,9 +29,9 @@ kotlin {
             api(npm(libs.physx.wasm.get().name, libs.versions.physx.wasm.get()))
         }
 
-//        androidMain.dependencies {
-//            api(libs.physx.android)
-//        }
+        androidMain.dependencies {
+            api(libs.physx.android)
+        }
     }
 }
 

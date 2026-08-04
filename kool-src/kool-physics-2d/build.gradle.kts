@@ -27,9 +27,9 @@ kotlin {
             //implementation(npm(File("$projectDir/npm/kool-box2d-wasm")))
         }
 
-//        androidMain.dependencies {
-//            api(libs.box2d.android)
-//        }
+        androidMain.dependencies {
+            api(libs.box2d.android)
+        }
     }
 }
 

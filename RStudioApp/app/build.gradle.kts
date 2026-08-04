@@ -44,6 +44,12 @@ android {
   kotlin {
     jvmToolchain(17)
   }
+
+  // The locally-built kool-core snapshot is compiled with Kotlin 2.4 while this
+  // module compiles with Kotlin 2.2 — allow the newer library metadata.
+  kotlin.compilerOptions {
+    freeCompilerArgs.add("-Xskip-metadata-version-check")
+  }
   buildFeatures {
     compose = true
     buildConfig = true

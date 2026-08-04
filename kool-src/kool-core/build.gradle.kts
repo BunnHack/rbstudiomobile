@@ -43,9 +43,9 @@ kotlin {
             implementation(npm("jszip", "3.10.1"))
         }
 
-//        androidMain.dependencies {
-//            implementation(libs.androidsvg)
-//        }
+        androidMain.dependencies {
+            implementation(libs.androidsvg)
+        }
     }
 }
 

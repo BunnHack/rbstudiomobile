@@ -3,7 +3,6 @@ package com.example.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -151,7 +150,7 @@ private fun CodeEditorPane(
                 .padding(top = 8.dp, end = 8.dp)
         )
 
-        BoxWithConstraints(
+        Box(
             modifier = Modifier
                 .weight(1f)
                 .horizontalScroll(horizontalScroll)
@@ -167,9 +166,7 @@ private fun CodeEditorPane(
                     fontSize = 13.sp,
                     lineHeight = 19.sp
                 ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .widthIn(min = maxWidth)
+                modifier = Modifier.widthIn(min = 2000.dp)
             )
         }
     }

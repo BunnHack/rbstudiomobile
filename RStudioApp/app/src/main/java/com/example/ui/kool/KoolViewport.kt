@@ -28,21 +28,14 @@ import de.fabmax.kool.platform.KoolContextAndroid
 /**
  * Real GPU 3D viewport backed by the kool engine (OpenGL ES 3 on Android).
  *
- * kool's KoolContext is a process-wide singleton (a second one throws), but its
- * embedded GLSurfaceView CANNOT be re-parented: once it is detached from the window
- * (tab switch / place switch), GLSurfaceView destroys its EGL surface and kool keeps
- * rendering into the dead one — the result is a black viewport that still accepts
- * clicks. So the surface view itself is owned by this holder, and a FRESH
- * GLSurfaceView is created every time the viewport enters the composition:
- *
- *   KoolContextAndroid (process singleton, survives everything)
- *     └─ backend (GLSurfaceView.Renderer, survives)
- *     └─ window.surfaceView  ← replaced per viewport session via reflection
- *
- * Each new surface view gets the SAME backend renderer, so when Android creates the
- * new EGL surface, onSurfaceCreated/onDrawFrame resume on the live context. GL object
- * handles (VBOs, textures) are EGL-context-local and are recreated by kool because
- * the new surface produces a new EGL context on this device path.
+ * kool's KoolContext is a process-wide singleton (a second one throws). The embedded
+ * GLSurfaceView is created once with the context and re-attached on every viewport
+ * session. Rendering survives tab switches because of two patches in kool itself:
+ *  - KoolSurfaceView.preserveEGLContextOnPause = false (detach destroys the EGL
+ *    context, so re-attach always recreates it)
+ *  - RenderBackendGlImpl.onSurfaceCreated always re-initializes GL state (the old
+ *    isGlContextInitialized guard skipped re-init, so the second surface rendered
+ *    with dead GL object handles -> black viewport).
  */
 @Composable
 fun KoolViewport(
@@ -71,10 +64,7 @@ fun KoolViewport(
             // 1) Boot kool once per process.
             val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid
                 ?: activity.createDefaultKoolContext()
-            // 2) Fresh surface view for this viewport session (see class doc). The old
-            //    one is defunct after detach, so we never re-parent it.
-            val surfaceView = newKoolSurfaceView(kctx, activity)
-            // 3) Build this composition's scene bridge and register its scene.
+            // 2) Build this composition's scene bridge and register its scene.
             val b = KoolSceneBridge(
                 onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
                 onPartPicked = { picked -> viewModel.selectPart(picked) }
@@ -85,8 +75,13 @@ fun KoolViewport(
             b.updateCamera(yaw, pitch, zoom)
             b.setGizmoMode(activeTool)
             b.syncParts(parts)
-            // 4) Embed, sized to fill the Compose layout.
-            surfaceView.apply {
+            // 3) Embed kool's surface view, sized to fill the Compose layout. The view
+            //    is created once per KoolContext and lives as long as the context; tab
+            //    switches only detach/reattach it, and with the patched
+            //    preserveEGLContextOnPause=false + always-reinit onSurfaceCreated, the
+            //    GL state is rebuilt on every re-attach.
+            kctx.surfaceView.apply {
+                (parent as? ViewGroup)?.removeView(this)
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT
@@ -105,6 +100,7 @@ fun KoolViewport(
             // re-register a fresh scene bridge — otherwise zero scenes render (black).
             if (bridge == null) {
                 val kctx = KoolSystem.getContextOrNull() as? KoolContextAndroid ?: return@AndroidView
+                (view.parent as? ViewGroup)?.removeView(view)
                 val b = KoolSceneBridge(
                     onPartTransformed = { updated -> viewModel.updatePartProperty(updated) },
                     onPartPicked = { picked -> viewModel.selectPart(picked) }
@@ -178,25 +174,4 @@ private fun unwrapActivity(ctx: Context): Activity? {
         c = c.baseContext
     }
     return c as? Activity
-}
-
-/**
- * Creates a fresh kool surface view wired to the context's existing GL renderer and
- * points the context's window at it. kool's AndroidWindow holds `surfaceView` in a
- * public `val`, so we swap it via reflection — the window/backend/context survive,
- * only the view is replaced. The renderer is set again by hand because kool only does
- * it once in AndroidWindow.init.
- */
-private fun newKoolSurfaceView(kctx: KoolContextAndroid, activity: Activity): GLSurfaceView {
-    val view = de.fabmax.kool.platform.KoolSurfaceView(activity.applicationContext)
-    view.setRenderer(kctx.backend)
-    runCatching {
-        val windowField = KoolContextAndroid::class.java.getDeclaredField("window")
-        windowField.isAccessible = true
-        val window = windowField.get(kctx)
-        val surfaceField = window.javaClass.getDeclaredField("surfaceView")
-        surfaceField.isAccessible = true
-        surfaceField.set(window, view)
-    }
-    return view
 }

@@ -54,10 +54,15 @@ class RenderBackendGlImpl(ctx: KoolContextAndroid) :
     }
 
     override fun onSurfaceCreated(unused: GL10, config: EGLConfig?) {
-        if (!isGlContextInitialized) {
-            initGlContext()
-            isGlContextInitialized = true
-        }
+        // Always (re)initialize the GL context here. GLSurfaceView fires this on every
+        // surface (re)creation — including after a Compose tab switch destroyed the
+        // previous EGL surface. With preserveEGLContextOnPause=false a brand-new EGL
+        // context exists, and ALL GL object handles (VBOs, textures, FBOs, shaders)
+        // from the previous context are invalid. Re-running init lets kool recreate
+        // its GPU resources; skipping it (the old guard) is what produced a black
+        // viewport after switching tabs.
+        initGlContext()
+        isGlContextInitialized = true
     }
 
     private fun initGlContext() {
