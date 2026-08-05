@@ -6,8 +6,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.example.models.Part
 import com.example.viewmodels.StudioViewModel
@@ -21,10 +23,12 @@ import io.github.sceneview.math.Rotation
 import io.github.sceneview.math.Scale
 import io.github.sceneview.math.Size
 import io.github.sceneview.node.CubeNode
+import io.github.sceneview.node.ConeNode
 import io.github.sceneview.node.PlaneNode
 import io.github.sceneview.node.SphereNode
 import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.node.LineNode
+import io.github.sceneview.node.TorusNode
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
@@ -33,7 +37,9 @@ import io.github.sceneview.rememberModelLoader
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * GPU 3D viewport backed by Filament via SceneView. Replaces the kool engine.
@@ -76,6 +82,7 @@ fun StudioViewport(
     val cameraManipulator = remember {
         DistanceScaledCameraManipulator(initialEye = initialCameraPosition)
     }
+    var gizmoDrag by remember { mutableStateOf<GizmoDragState?>(null) }
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember { RobloxTextureLoader(engine, OkHttpClient()) }
@@ -130,23 +137,50 @@ fun StudioViewport(
         // proportional to how far you're zoomed out.
         cameraManipulator = cameraManipulator,
         onTouchEvent = { event, hitResult ->
-            if (event.action == MotionEvent.ACTION_UP) {
-                val partId = hitResult?.node?.name?.removePrefix("part:")
-                viewModel.selectPart(parts.firstOrNull { it.id == partId })
+            val handle = hitResult?.node?.name?.let(::parseGizmoHandle)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (handle != null && selectedPart != null) {
+                        gizmoDrag = createGizmoDragState(
+                            part = selectedPart!!,
+                            handle = handle,
+                            event = event,
+                            cameraNode = cameraNode
+                        )
+                        true
+                    } else {
+                        false
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    gizmoDrag?.let { drag ->
+                        viewModel.updatePartProperty(drag.updatedPart(event))
+                        true
+                    } ?: false
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    val drag = gizmoDrag
+                    if (drag != null) {
+                        viewModel.updatePartProperty(drag.updatedPart(event))
+                        gizmoDrag = null
+                        true
+                    } else {
+                        if (event.actionMasked == MotionEvent.ACTION_UP) {
+                            val partId = hitResult?.node?.name?.removePrefix("part:")
+                            viewModel.selectPart(parts.firstOrNull { it.id == partId })
+                        }
+                        false
+                    }
+                }
+                else -> gizmoDrag != null
             }
-            // Return false so the gesture detector still receives the event and camera
-            // orbit/pan/zoom keep working (returning true would consume every touch).
-            false
         }
     ) {
         parts.forEach { part ->
             PartNode(
                 materialLoader = materialLoader,
                 part = part,
-                isSelected = part.id == selectedPart?.id,
-                activeTool = activeTool,
-                onSelect = { viewModel.selectPart(part) },
-                onTransformEdited = { updated -> viewModel.updatePartProperty(updated) }
+                onSelect = { viewModel.selectPart(part) }
             )
         }
 
@@ -161,6 +195,9 @@ fun StudioViewport(
         // Selection highlight: a transparent cyan cube slightly larger than the part.
         selectedPart?.let { part ->
             SelectionNode(materialLoader, part)
+            if (activeTool != "SELECT") {
+                TransformGizmo(materialLoader, part, activeTool)
+            }
         }
     }
 }
@@ -169,10 +206,7 @@ fun StudioViewport(
 private fun SceneScope.PartNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
     part: Part,
-    isSelected: Boolean,
-    activeTool: String,
-    onSelect: () -> Unit,
-    onTransformEdited: (Part) -> Unit
+    onSelect: () -> Unit
 ) {
     val material = remember(part.colorHex, part.transparency) {
         materialLoader.createColorInstance(
@@ -186,24 +220,12 @@ private fun SceneScope.PartNode(
     val rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
     val scale = Scale(part.size.x, part.size.y, part.size.z)
 
-    // Live-editable transform state. Position/rotation/scale are State-backed so the
-    // gesture edits (which mutate node.position etc.) are reflected without fighting
-    // the part's immutable props; the ViewModel is only written back on gesture end.
     val editConfig: io.github.sceneview.node.Node.() -> Unit = {
         name = "part:${part.id}"
-        // Tap selects this part.
         onSingleTapUp = { onSelect(); true }
-        // Editing: enable only the active tool's gesture for the selected part.
-        isEditable = isSelected && activeTool != "SELECT"
-        isPositionEditable = isSelected && activeTool == "MOVE"
-        isRotationEditable = isSelected && activeTool == "ROTATE"
-        isScaleEditable = isSelected && activeTool == "SCALE"
-        // Write the dragged transform back to the ViewModel when the gesture ends, and
-        // also live-sync during editing so the properties panel updates while dragging.
-        onEditingChanged = { onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
-        onMoveEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
-        onRotateEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
-        onScaleEnd = { _, _ -> onTransformEdited(part.withTransformFrom(worldPosition, rotation, scale)) }
+        // Transform editing is owned by the visible axis gizmo below. Keeping direct
+        // node editing disabled prevents object gestures from fighting camera gestures.
+        isEditable = false
     }
 
     when (part.shape) {
@@ -298,20 +320,180 @@ private fun buildWedgeGeometry(engine: com.google.android.filament.Engine): io.g
         .build(engine)
 }
 
-/** Copy this part with a new world transform read back from the edited render node. */
-private fun Part.withTransformFrom(
-    worldPosition: Position,
-    rotation: Rotation,
-    scale: Scale
-): Part = copy(
-    position = com.example.models.Vector3(worldPosition.x, worldPosition.y, worldPosition.z),
-    rotation = com.example.models.Vector3(rotation.x, rotation.y, rotation.z),
-    size = com.example.models.Vector3(
-        (size.x * scale.x).coerceAtLeast(0.05f),
-        (size.y * scale.y).coerceAtLeast(0.05f),
-        (size.z * scale.z).coerceAtLeast(0.05f)
+private enum class GizmoAxis(val x: Float, val y: Float, val z: Float) {
+    X(1f, 0f, 0f),
+    Y(0f, 1f, 0f),
+    Z(0f, 0f, 1f)
+}
+
+private data class GizmoHandle(val tool: String, val axis: GizmoAxis)
+
+private data class GizmoDragState(
+    val part: Part,
+    val handle: GizmoHandle,
+    val startX: Float,
+    val startY: Float,
+    val screenAxisX: Float,
+    val screenAxisY: Float,
+    val pixelsPerWorldUnit: Float
+) {
+    fun updatedPart(event: MotionEvent): Part {
+        val dx = event.x - startX
+        val dy = event.y - startY
+        val signedPixels = dx * screenAxisX + dy * screenAxisY
+        val worldDelta = signedPixels / pixelsPerWorldUnit.coerceAtLeast(0.25f)
+        val axis = handle.axis
+        return when (handle.tool) {
+            "MOVE" -> part.copy(
+                position = com.example.models.Vector3(
+                    part.position.x + axis.x * worldDelta,
+                    part.position.y + axis.y * worldDelta,
+                    part.position.z + axis.z * worldDelta
+                )
+            )
+            "SCALE" -> part.copy(
+                size = com.example.models.Vector3(
+                    (part.size.x + axis.x * worldDelta).coerceAtLeast(0.05f),
+                    (part.size.y + axis.y * worldDelta).coerceAtLeast(0.05f),
+                    (part.size.z + axis.z * worldDelta).coerceAtLeast(0.05f)
+                )
+            )
+            "ROTATE" -> {
+                val degrees = signedPixels * 0.65f
+                part.copy(
+                    rotation = com.example.models.Vector3(
+                        part.rotation.x + axis.x * degrees,
+                        part.rotation.y + axis.y * degrees,
+                        part.rotation.z + axis.z * degrees
+                    )
+                )
+            }
+            else -> part
+        }
+    }
+}
+
+private fun parseGizmoHandle(name: String): GizmoHandle? {
+    if (!name.startsWith("gizmo:")) return null
+    val fields = name.split(':')
+    if (fields.size != 3) return null
+    val tool = fields[1]
+    val axis = runCatching { GizmoAxis.valueOf(fields[2]) }.getOrNull() ?: return null
+    return GizmoHandle(tool, axis)
+}
+
+private fun createGizmoDragState(
+    part: Part,
+    handle: GizmoHandle,
+    event: MotionEvent,
+    cameraNode: io.github.sceneview.node.CameraNode
+): GizmoDragState {
+    val handleLength = gizmoLength(part)
+    val origin = io.github.sceneview.collision.Vector3(
+        part.position.x,
+        part.position.y,
+        part.position.z
     )
-)
+    val endpoint = io.github.sceneview.collision.Vector3(
+        part.position.x + handle.axis.x * handleLength,
+        part.position.y + handle.axis.y * handleLength,
+        part.position.z + handle.axis.z * handleLength
+    )
+    @Suppress("DEPRECATION")
+    val originScreen = cameraNode.worldToScreenPoint(origin)
+    @Suppress("DEPRECATION")
+    val endpointScreen = cameraNode.worldToScreenPoint(endpoint)
+    val sx = endpointScreen.x - originScreen.x
+    val sy = endpointScreen.y - originScreen.y
+    val screenLength = sqrt(sx * sx + sy * sy).coerceAtLeast(1f)
+    return GizmoDragState(
+        part = part,
+        handle = handle,
+        startX = event.x,
+        startY = event.y,
+        screenAxisX = sx / screenLength,
+        screenAxisY = sy / screenLength,
+        pixelsPerWorldUnit = screenLength / handleLength.coerceAtLeast(0.1f)
+    )
+}
+
+private fun gizmoLength(part: Part): Float =
+    max(2.5f, max(part.size.x, max(part.size.y, part.size.z)) * 0.8f)
+
+/** Visible Roblox-style world-axis transform handles for MOVE / SCALE / ROTATE. */
+@Composable
+private fun SceneScope.TransformGizmo(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    part: Part,
+    tool: String
+) {
+    val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)) }
+    val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)) }
+    val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)) }
+    val center = Position(part.position.x, part.position.y, part.position.z)
+    val length = gizmoLength(part)
+    val rodRadius = (length * 0.035f).coerceIn(0.08f, 0.3f)
+    val endpointSize = (length * 0.14f).coerceIn(0.3f, 1.2f)
+
+    val axes = listOf(
+        Triple(GizmoAxis.X, red, Rotation(0f, 0f, -90f)),
+        Triple(GizmoAxis.Y, green, Rotation(0f, 0f, 0f)),
+        Triple(GizmoAxis.Z, blue, Rotation(90f, 0f, 0f))
+    )
+
+    if (tool == "ROTATE") {
+        axes.forEach { (axis, material, rotation) ->
+            TorusNode(
+                majorRadius = length * 0.68f,
+                minorRadius = rodRadius,
+                materialInstance = material,
+                position = center,
+                rotation = rotation,
+                apply = { name = "gizmo:ROTATE:${axis.name}" }
+            )
+        }
+        return
+    }
+
+    axes.forEach { (axis, material, rotation) ->
+        val half = length * 0.5f
+        val rodCenter = Position(
+            center.x + axis.x * half,
+            center.y + axis.y * half,
+            center.z + axis.z * half
+        )
+        val endpoint = Position(
+            center.x + axis.x * length,
+            center.y + axis.y * length,
+            center.z + axis.z * length
+        )
+        CylinderNode(
+            radius = rodRadius,
+            height = length,
+            materialInstance = material,
+            position = rodCenter,
+            rotation = rotation,
+            apply = { name = "gizmo:$tool:${axis.name}" }
+        )
+        if (tool == "MOVE") {
+            ConeNode(
+                radius = endpointSize * 0.45f,
+                height = endpointSize,
+                materialInstance = material,
+                position = endpoint,
+                rotation = rotation,
+                apply = { name = "gizmo:MOVE:${axis.name}" }
+            )
+        } else {
+            CubeNode(
+                size = Size(endpointSize, endpointSize, endpointSize),
+                materialInstance = material,
+                position = endpoint,
+                apply = { name = "gizmo:SCALE:${axis.name}" }
+            )
+        }
+    }
+}
 
 @Composable
 private fun SceneScope.DecalNode(
