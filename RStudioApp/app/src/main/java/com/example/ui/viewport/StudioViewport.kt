@@ -5,6 +5,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,14 +31,15 @@ import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.node.LineNode
 import io.github.sceneview.node.TorusNode
 import io.github.sceneview.rememberCameraNode
+import io.github.sceneview.rememberCollisionSystem
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import io.github.sceneview.rememberView
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import kotlin.math.cos
-import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -71,18 +73,19 @@ fun StudioViewport(
     val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
 
     val engine = rememberEngine()
+    val view = rememberView(engine)
     val modelLoader = rememberModelLoader(engine)
     val materialLoader = rememberMaterialLoader(engine)
     val environmentLoader = rememberEnvironmentLoader(engine)
     val cameraNode = rememberCameraNode(engine)
-
-    val initialCameraPosition = remember {
-        orbitCameraPosition(yaw = yaw, pitch = pitch, distance = zoom)
-    }
+    val collisionSystem = rememberCollisionSystem(view)
     val cameraManipulator = remember {
-        DistanceScaledCameraManipulator(initialEye = initialCameraPosition)
+        DistanceScaledCameraManipulator(
+            initialEye = orbitCameraPosition(yaw = yaw, pitch = pitch, distance = zoom)
+        )
     }
     var gizmoDrag by remember { mutableStateOf<GizmoDragState?>(null) }
+    var gizmoCameraDistance by remember { mutableFloatStateOf(zoom.coerceAtLeast(0.5f)) }
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember { RobloxTextureLoader(engine, OkHttpClient()) }
@@ -110,16 +113,11 @@ fun StudioViewport(
         }
     }
 
-    // Orbit camera from ViewModel state.
+    // External toolbar/reset camera values feed the same custom manipulator. User
+    // gestures are internal and don't trigger this effect, so a panned target remains
+    // stable until an explicit camera command is issued.
     LaunchedEffect(yaw, pitch, zoom) {
-        val yawR = Math.toRadians(yaw.toDouble())
-        val pitchR = Math.toRadians(pitch.toDouble().coerceIn(-89.0, 89.0))
-        val dist = zoom.coerceAtLeast(0.5f)
-        val x = (dist * cos(pitchR) * sin(yawR)).toFloat()
-        val y = (dist * sin(pitchR)).toFloat()
-        val z = (dist * cos(pitchR) * cos(yawR)).toFloat()
-        cameraNode.position = Position(x, y, z)
-        cameraNode.lookAt(Position(0f, 0f, 0f))
+        cameraManipulator.setOrbit(yaw, pitch, zoom)
     }
 
     SceneView(
@@ -128,7 +126,9 @@ fun StudioViewport(
         modelLoader = modelLoader,
         materialLoader = materialLoader,
         environmentLoader = environmentLoader,
+        view = view,
         cameraNode = cameraNode,
+        collisionSystem = collisionSystem,
         // Strict per-node placement — our parts are authored in world space.
         autoCenterContent = false,
         // Orbit/pan/zoom camera gestures with a distance-scaled speed: the default
@@ -137,7 +137,10 @@ fun StudioViewport(
         // proportional to how far you're zoomed out.
         cameraManipulator = cameraManipulator,
         onTouchEvent = { event, hitResult ->
-            val handle = hitResult?.node?.name?.let(::parseGizmoHandle)
+            // Prefer gizmo handles anywhere along the ray, even when a large part is
+            // the closest hit. This makes both the rod and endpoint draggable.
+            val handle = collisionSystem.hitTest(event)
+                .firstNotNullOfOrNull { it.node.name?.let(::parseGizmoHandle) }
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (handle != null && selectedPart != null) {
@@ -145,7 +148,8 @@ fun StudioViewport(
                             part = selectedPart!!,
                             handle = handle,
                             event = event,
-                            cameraNode = cameraNode
+                            cameraNode = cameraNode,
+                            handleLength = gizmoLength(gizmoCameraDistance)
                         )
                         true
                     } else {
@@ -174,6 +178,12 @@ fun StudioViewport(
                 }
                 else -> gizmoDrag != null
             }
+        },
+        onFrame = {
+            val distance = cameraManipulator.distance.coerceAtLeast(0.5f)
+            if (kotlin.math.abs(distance - gizmoCameraDistance) > distance * 0.03f) {
+                gizmoCameraDistance = distance
+            }
         }
     ) {
         parts.forEach { part ->
@@ -196,7 +206,7 @@ fun StudioViewport(
         selectedPart?.let { part ->
             SelectionNode(materialLoader, part)
             if (activeTool != "SELECT") {
-                TransformGizmo(materialLoader, part, activeTool)
+                TransformGizmo(materialLoader, part, activeTool, gizmoCameraDistance)
             }
         }
     }
@@ -386,9 +396,9 @@ private fun createGizmoDragState(
     part: Part,
     handle: GizmoHandle,
     event: MotionEvent,
-    cameraNode: io.github.sceneview.node.CameraNode
+    cameraNode: io.github.sceneview.node.CameraNode,
+    handleLength: Float
 ): GizmoDragState {
-    val handleLength = gizmoLength(part)
     val origin = io.github.sceneview.collision.Vector3(
         part.position.x,
         part.position.y,
@@ -417,21 +427,23 @@ private fun createGizmoDragState(
     )
 }
 
-private fun gizmoLength(part: Part): Float =
-    max(2.5f, max(part.size.x, max(part.size.y, part.size.z)) * 0.8f)
+/** 18% of camera distance keeps the gizmo nearly constant in screen space. */
+private fun gizmoLength(cameraDistance: Float): Float =
+    (cameraDistance * 0.18f).coerceIn(1.5f, 80f)
 
 /** Visible Roblox-style world-axis transform handles for MOVE / SCALE / ROTATE. */
 @Composable
 private fun SceneScope.TransformGizmo(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
     part: Part,
-    tool: String
+    tool: String,
+    cameraDistance: Float
 ) {
     val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)) }
     val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)) }
     val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)) }
     val center = Position(part.position.x, part.position.y, part.position.z)
-    val length = gizmoLength(part)
+    val length = gizmoLength(cameraDistance)
     val rodRadius = (length * 0.035f).coerceIn(0.08f, 0.3f)
     val endpointSize = (length * 0.14f).coerceIn(0.3f, 1.2f)
 
@@ -449,7 +461,12 @@ private fun SceneScope.TransformGizmo(
                 materialInstance = material,
                 position = center,
                 rotation = rotation,
-                apply = { name = "gizmo:ROTATE:${axis.name}" }
+                apply = {
+                    name = "gizmo:ROTATE:${axis.name}"
+                    isTouchable = true
+                    isHittable = true
+                    setPriority(7)
+                }
             )
         }
         return
@@ -473,7 +490,12 @@ private fun SceneScope.TransformGizmo(
             materialInstance = material,
             position = rodCenter,
             rotation = rotation,
-            apply = { name = "gizmo:$tool:${axis.name}" }
+            apply = {
+                name = "gizmo:$tool:${axis.name}"
+                isTouchable = true
+                isHittable = true
+                setPriority(7)
+            }
         )
         if (tool == "MOVE") {
             ConeNode(
@@ -482,14 +504,24 @@ private fun SceneScope.TransformGizmo(
                 materialInstance = material,
                 position = endpoint,
                 rotation = rotation,
-                apply = { name = "gizmo:MOVE:${axis.name}" }
+                apply = {
+                    name = "gizmo:MOVE:${axis.name}"
+                    isTouchable = true
+                    isHittable = true
+                    setPriority(7)
+                }
             )
         } else {
             CubeNode(
                 size = Size(endpointSize, endpointSize, endpointSize),
                 materialInstance = material,
                 position = endpoint,
-                apply = { name = "gizmo:SCALE:${axis.name}" }
+                apply = {
+                    name = "gizmo:SCALE:${axis.name}"
+                    isTouchable = true
+                    isHittable = true
+                    setPriority(7)
+                }
             )
         }
     }
