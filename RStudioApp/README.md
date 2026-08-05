@@ -12,13 +12,10 @@ View your app in AI Studio: https://ai.studio/apps/efbbe87d-a989-4ba7-a4c3-054de
 
 **Prerequisites:** [Android Studio](https://developer.android.com/studio) (or a local JDK 17+ and Android SDK)
 
-> **Real 3D:** The viewport is now rendered by the **kool** engine
-> (`de.fabmax.kool:kool-core:0.19.0`), a Kotlin GPU engine with an **OpenGL ES 3**
-> backend on Android. Parts are rendered as solid, z-buffered, **PBR-lit** meshes
-> (cube / icoSphere / cylinder / wedge) via `KslPbrShader`, with a native touch-orbit
-> / pinch-zoom camera. The previous Canvas 2D painter's-algorithm viewport was
-> replaced by `KoolViewport` in `app/src/main/java/com/example/ui/kool/`.
-> kool is consumed as a single Maven Central dependency (no vendoring).
+> **Real 3D:** The viewport is rendered by **SceneView + Google Filament**
+> (`io.github.sceneview:sceneview:4.25.0`) with GPU-lit primitives, decals, selection
+> outlines, transform gizmos, hit testing, and touch orbit/pan/zoom. The implementation
+> lives in `app/src/main/java/com/example/ui/viewport/`; no 3D engine source is vendored.
 
 ### Steps
 

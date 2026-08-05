@@ -241,7 +241,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             runCatching {
                 logSystem("Publish: Serializing '${name}' to Roblox binary place file...")
-                val rbxlBytes = RobloxPlaceBinarySerializer.serialize(name, currentParts)
+                val rbxlBytes = RobloxPlaceBinarySerializer.serialize(name, currentParts, _nodes.value)
                 logSystem("Publish: Uploading ${rbxlBytes.size} bytes to Roblox with template $templatePlaceId...")
                 publishClient.publish(
                     roblosecurityCookie = roblosecurityCookie,
@@ -437,10 +437,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun defaultScriptSource(className: String): String =
-        if (className == StudioNode.CLASS_LOCAL_SCRIPT) {
-            "-- LocalScript\nprint('Hello from client')\n"
-        } else {
-            "-- Script\nprint('Hello world!')\n"
+        when (className) {
+            StudioNode.CLASS_LOCAL_SCRIPT -> "-- LocalScript\nprint('Hello from client')\n"
+            StudioNode.CLASS_MODULE_SCRIPT -> "-- ModuleScript\nlocal module = {}\n\nreturn module\n"
+            else -> "-- Script\nprint('Hello world!')\n"
         }
 
     private fun defaultScriptProperties(className: String, parentId: String?): Map<String, String> {
@@ -457,6 +457,72 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             "Tags" to "",
             "ParentId" to (parentId ?: "Workspace")
         )
+    }
+
+    private fun defaultObjectProperties(className: String, parentId: String?): Map<String, String> {
+        val identity = linkedMapOf(
+            "ClassName" to className,
+            "Name" to className,
+            "ParentId" to (parentId ?: StudioNode.CLASS_WORKSPACE),
+            "SourceAssetId" to "-1",
+            "Tags" to ""
+        )
+        identity += when (className) {
+            StudioNode.CLASS_ATTACHMENT -> mapOf(
+                "CFrame" to "pos 0.000, 0.000, 0.000; rot identity",
+                "Visible" to "true"
+            )
+            StudioNode.CLASS_REMOTE_EVENT -> emptyMap()
+            StudioNode.CLASS_SOUND -> mapOf(
+                "SoundId" to "",
+                "Volume" to "0.5",
+                "PlaybackSpeed" to "1.0",
+                "Looped" to "false",
+                "Playing" to "false",
+                "PlayOnRemove" to "false",
+                "TimePosition" to "0.0",
+                "RollOffMinDistance" to "10.0",
+                "RollOffMaxDistance" to "10000.0"
+            )
+            StudioNode.CLASS_POINT_LIGHT -> mapOf(
+                "Brightness" to "1.0",
+                "Color" to "#FFFFFF",
+                "Enabled" to "true",
+                "Range" to "8.0",
+                "Shadows" to "false"
+            )
+            StudioNode.CLASS_SPOT_LIGHT -> mapOf(
+                "Angle" to "45.0",
+                "Brightness" to "1.0",
+                "Color" to "#FFFFFF",
+                "Enabled" to "true",
+                "Face" to "Front",
+                "Range" to "16.0",
+                "Shadows" to "false"
+            )
+            StudioNode.CLASS_SURFACE_LIGHT -> mapOf(
+                "Angle" to "90.0",
+                "Brightness" to "1.0",
+                "Color" to "#FFFFFF",
+                "Enabled" to "true",
+                "Face" to "Front",
+                "Range" to "16.0",
+                "Shadows" to "false"
+            )
+            else -> emptyMap()
+        }
+        return identity
+    }
+
+    private fun objectInsertionParentId(className: String, selected: StudioNode?): String? = when (className) {
+        StudioNode.CLASS_MODULE_SCRIPT,
+        StudioNode.CLASS_REMOTE_EVENT -> selected?.id ?: StudioNode.CLASS_REPLICATED_STORAGE
+        StudioNode.CLASS_ATTACHMENT,
+        StudioNode.CLASS_SOUND,
+        StudioNode.CLASS_POINT_LIGHT,
+        StudioNode.CLASS_SPOT_LIGHT,
+        StudioNode.CLASS_SURFACE_LIGHT -> selected?.id ?: null
+        else -> insertionParentId(selected)
     }
 
     private fun defaultGuiProperties(className: String, parentId: String?): Map<String, String> {
@@ -568,7 +634,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
      */
     fun insertNode(className: String) {
         val selected = _selectedNode.value
-        val parentId = insertionParentId(selected)
+        val parentId = if (className == StudioNode.CLASS_MODULE_SCRIPT) {
+            selected?.id ?: StudioNode.CLASS_REPLICATED_STORAGE
+        } else {
+            insertionParentId(selected)
+        }
         val pivot = selected?.part?.currentPosition ?: Vector3(0f, 4f, 0f)
 
         val nodeId = UUID.randomUUID().toString()
@@ -591,7 +661,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     "ParentId" to (parentId ?: "Workspace")
                 )
             )
-            StudioNode.CLASS_SCRIPT, StudioNode.CLASS_LOCAL_SCRIPT -> StudioNode(
+            in StudioNode.SCRIPT_CLASS_NAMES -> StudioNode(
                 id = nodeId,
                 name = className,
                 className = className,
@@ -874,13 +944,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 _selectedNode.value = node
             }
             StudioNode.CLASS_DECAL, StudioNode.CLASS_TEXTURE, StudioNode.CLASS_WELD, StudioNode.CLASS_WELD_CONSTRAINT,
+            StudioNode.CLASS_ATTACHMENT, StudioNode.CLASS_REMOTE_EVENT, StudioNode.CLASS_SOUND,
+            StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT,
             StudioNode.CLASS_SCREEN_GUI, StudioNode.CLASS_FRAME, StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON,
             StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON,
             "ClickDetector", "ProximityPrompt", "Dialog" -> {
                 // Non-renderable 3D interface — create as node without part
                 val selected = _selectedNode.value
                 val extraNodes = mutableListOf<StudioNode>()
-                val parentId = guiInsertionParentId(className, selected, extraNodes) ?: insertionParentId(selected)
+                val parentId = guiInsertionParentId(className, selected, extraNodes)
+                    ?: objectInsertionParentId(className, selected)
                 val defaultProperties = when (className) {
                     StudioNode.CLASS_DECAL -> mapOf(
                         "ClassName" to StudioNode.CLASS_DECAL,
@@ -917,6 +990,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         "ParentId" to (parentId ?: "Workspace")
                     )
                     in StudioNode.GUI_CLASS_NAMES -> defaultGuiProperties(className, parentId)
+                    StudioNode.CLASS_ATTACHMENT,
+                    StudioNode.CLASS_REMOTE_EVENT,
+                    StudioNode.CLASS_SOUND,
+                    StudioNode.CLASS_POINT_LIGHT,
+                    StudioNode.CLASS_SPOT_LIGHT,
+                    StudioNode.CLASS_SURFACE_LIGHT -> defaultObjectProperties(className, parentId)
                     else -> mapOf(
                         "ClassName" to className,
                         "Name" to className,
@@ -1316,7 +1395,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val currentParts = if (_isPlaying.value) simulationOriginalState else _parts.value
         val fileName = currentPlace.name.ifBlank { "place" }
             .replace(Regex("[^A-Za-z0-9._-]"), "_") + ".rbxl"
-        val bytes = RobloxPlaceBinarySerializer.serialize(currentPlace.name, currentParts)
+        val bytes = RobloxPlaceBinarySerializer.serialize(currentPlace.name, currentParts, _nodes.value)
         return fileName to bytes
     }
 

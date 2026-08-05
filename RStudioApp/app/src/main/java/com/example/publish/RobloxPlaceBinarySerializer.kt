@@ -1,6 +1,7 @@
 package com.example.publish
 
 import com.example.models.Part
+import com.example.models.StudioNode
 import com.example.models.Vector3
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -24,8 +25,8 @@ import kotlin.math.sin
  *  - Chunk order matches Studio: INST chunks sorted by class name, then PROP chunks per class.
  */
 object RobloxPlaceBinarySerializer {
-    fun serialize(placeName: String, parts: List<Part>): ByteArray {
-        val instances = buildInstances(parts)
+    fun serialize(placeName: String, parts: List<Part>, nodes: List<StudioNode> = emptyList()): ByteArray {
+        val instances = buildInstances(parts, nodes)
         // Sequential referents in declaration order (DataModel tree order).
         instances.forEachIndexed { index, instance -> instance.referent = index }
 
@@ -58,8 +59,9 @@ object RobloxPlaceBinarySerializer {
         return writer.toByteArray()
     }
 
-    private fun buildInstances(parts: List<Part>): List<InstanceRecord> {
+    private fun buildInstances(parts: List<Part>, nodes: List<StudioNode>): List<InstanceRecord> {
         val instances = mutableListOf<InstanceRecord>()
+        val instancesById = mutableMapOf<String, InstanceRecord>()
         fun add(className: String, name: String, parent: InstanceRecord?): InstanceRecord {
             val instance = InstanceRecord(className, name, parent)
             instances.add(instance)
@@ -75,30 +77,34 @@ object RobloxPlaceBinarySerializer {
             props["GlobalWind"] = Vector3.Zero
             props["ExplicitAutoJoints"] = true
         }
-        add("Players", "Players", null).apply {
+        instancesById[StudioNode.CLASS_WORKSPACE] = workspace
+        val players = add("Players", "Players", null).apply {
             props["MaxPlayersInternal"] = 6
             props["PreferredPlayersInternal"] = 6
             props["CharacterAutoLoads"] = true
             props["RespawnTime"] = 3f
         }
+        instancesById[StudioNode.CLASS_PLAYERS] = players
         val lighting = add("Lighting", "Lighting", null).apply {
             props["Brightness"] = 2f
             props["GlobalShadows"] = true
             props["TimeOfDay"] = "14:30:00"
             props["Technology"] = 3
         }
-        add("ReplicatedFirst", "ReplicatedFirst", null)
-        add("ReplicatedStorage", "ReplicatedStorage", null)
-        add("ServerScriptService", "ServerScriptService", null)
-        add("ServerStorage", "ServerStorage", null)
-        add("StarterGui", "StarterGui", null)
-        add("StarterPack", "StarterPack", null)
-        add("StarterPlayer", "StarterPlayer", null)
-        add("Teams", "Teams", null)
-        add("SoundService", "SoundService", null)
+        instancesById[StudioNode.CLASS_LIGHTING] = lighting
+        listOf(
+            "ReplicatedFirst", StudioNode.CLASS_REPLICATED_STORAGE,
+            StudioNode.CLASS_SERVER_SCRIPT_SERVICE, "ServerStorage",
+            StudioNode.CLASS_STARTER_GUI, StudioNode.CLASS_STARTER_PACK,
+            "StarterPlayer", "Teams", "SoundService"
+        ).forEach { className ->
+            instancesById[className] = add(className, className, null)
+        }
 
         parts.forEachIndexed { index, part ->
             val instance = add(classNameFor(part), part.name.ifBlank { "Part${index + 1}" }, workspace)
+            instancesById[part.id] = instance
+            nodes.firstOrNull { it.part?.id == part.id }?.let { instancesById[it.id] = instance }
             addBasePartProps(instance, part)
             if (instance.className == "Part" || instance.className == "SpawnLocation") {
                 instance.props["Shape"] = shapeToken(part.shape)
@@ -116,7 +122,87 @@ object RobloxPlaceBinarySerializer {
             }
         }
 
+        val userNodes = nodes.filter { !it.isService && it.part == null }
+        val pending = userNodes.toMutableList()
+        var madeProgress: Boolean
+        do {
+            madeProgress = false
+            val iterator = pending.iterator()
+            while (iterator.hasNext()) {
+                val node = iterator.next()
+                val parent = node.parentId?.let(instancesById::get) ?: workspace
+                if (node.parentId != null && node.parentId !in instancesById && userNodes.any { it.id == node.parentId }) {
+                    continue
+                }
+                val instance = add(node.className, node.name.ifBlank { node.className }, parent)
+                addNodeProps(instance, node)
+                instancesById[node.id] = instance
+                iterator.remove()
+                madeProgress = true
+            }
+        } while (madeProgress && pending.isNotEmpty())
+
+        // Malformed / cyclic imported hierarchies fall back to Workspace rather than
+        // being silently dropped from the published place.
+        pending.forEach { node ->
+            val instance = add(node.className, node.name.ifBlank { node.className }, workspace)
+            addNodeProps(instance, node)
+            instancesById[node.id] = instance
+        }
+
         return instances
+    }
+
+    private fun addNodeProps(instance: InstanceRecord, node: StudioNode) {
+        fun prop(name: String, default: String = "") = node.nodeProperties[name] ?: default
+        fun bool(name: String, default: Boolean) = prop(name, default.toString()).toBooleanStrictOrNull() ?: default
+        fun float(name: String, default: Float) = prop(name, default.toString()).toFloatOrNull() ?: default
+        fun double(name: String, default: Double) = prop(name, default.toString()).toDoubleOrNull() ?: default
+        fun int(name: String, default: Int) = prop(name, default.toString()).toIntOrNull() ?: default
+
+        when (node.className) {
+            StudioNode.CLASS_SCRIPT,
+            StudioNode.CLASS_LOCAL_SCRIPT,
+            StudioNode.CLASS_MODULE_SCRIPT -> {
+                instance.props["Source"] = node.scriptSource.ifBlank { prop("Source") }
+                instance.props["LinkedSource"] = prop("LinkedSource")
+                instance.props["ScriptGuid"] = prop("ScriptGuid", UUID.randomUUID().toString())
+                if (node.className != StudioNode.CLASS_MODULE_SCRIPT) {
+                    instance.props["Disabled"] = bool("Disabled", false)
+                }
+            }
+            StudioNode.CLASS_ATTACHMENT -> {
+                instance.props["CFrame"] = CFrameValue(Vector3.Zero, rotationMatrix(Vector3.Zero))
+                instance.props["Visible"] = bool("Visible", true)
+            }
+            StudioNode.CLASS_SOUND -> {
+                instance.props["SoundId"] = prop("SoundId")
+                instance.props["Volume"] = float("Volume", 0.5f)
+                instance.props["PlaybackSpeed"] = float("PlaybackSpeed", 1f)
+                instance.props["Looped"] = bool("Looped", false)
+                instance.props["Playing"] = bool("Playing", false)
+                instance.props["PlayOnRemove"] = bool("PlayOnRemove", false)
+                instance.props["TimePosition"] = double("TimePosition", 0.0)
+                instance.props["RollOffMinDistance"] = float("RollOffMinDistance", 10f)
+                instance.props["RollOffMaxDistance"] = float("RollOffMaxDistance", 10_000f)
+                instance.props["RollOffMode"] = int("RollOffMode", 0)
+            }
+            StudioNode.CLASS_POINT_LIGHT,
+            StudioNode.CLASS_SPOT_LIGHT,
+            StudioNode.CLASS_SURFACE_LIGHT -> {
+                instance.props["Brightness"] = float("Brightness", 1f)
+                instance.props["Color"] = colorRgbFromHex(prop("Color", "#FFFFFF"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["Range"] = float("Range", if (node.className == StudioNode.CLASS_POINT_LIGHT) 8f else 16f)
+                instance.props["Shadows"] = bool("Shadows", false)
+                if (node.className != StudioNode.CLASS_POINT_LIGHT) {
+                    instance.props["Angle"] = float("Angle", if (node.className == StudioNode.CLASS_SPOT_LIGHT) 45f else 90f)
+                    instance.props["Face"] = faceToken(prop("Face", "Front"))
+                }
+            }
+        }
+        instance.props["SourceAssetId"] = prop("SourceAssetId", "-1").toLongOrNull() ?: -1L
+        instance.props["Tags"] = prop("Tags")
     }
 
     private fun classNameFor(part: Part): String = when (part.shape) {
@@ -225,10 +311,46 @@ object RobloxPlaceBinarySerializer {
                 writeEnumProp(writer, classId, "Technology", instances.map { it.props["Technology"] as Int })
             }
             "Part", "WedgePart", "SpawnLocation" -> writeBasePartProps(writer, classId, instances, className != "WedgePart")
-            "Script", "LocalScript" -> {
+            "Script", "LocalScript", "ModuleScript" -> {
                 writeStringProp(writer, classId, "Source", instances.map { it.props["Source"] as? String ?: "" })
-                writeBoolProp(writer, classId, "Disabled", instances.map { it.props["Disabled"] as? Boolean ?: false })
+                writeStringProp(writer, classId, "LinkedSource", instances.map { it.props["LinkedSource"] as? String ?: "" })
+                writeStringProp(writer, classId, "ScriptGuid", instances.map { it.props["ScriptGuid"] as? String ?: "" })
+                if (className != "ModuleScript") {
+                    writeBoolProp(writer, classId, "Disabled", instances.map { it.props["Disabled"] as? Boolean ?: false })
+                }
             }
+            "Attachment" -> {
+                writeCFrameProp(writer, classId, "CFrame", instances.map { it.props["CFrame"] as CFrameValue })
+                writeBoolProp(writer, classId, "Visible", instances.map { it.props["Visible"] as Boolean })
+            }
+            "Sound" -> {
+                writeStringProp(writer, classId, "SoundId", instances.map { it.props["SoundId"] as String })
+                writeFloatProp(writer, classId, "Volume", instances.map { it.props["Volume"] as Float })
+                writeFloatProp(writer, classId, "PlaybackSpeed", instances.map { it.props["PlaybackSpeed"] as Float })
+                writeBoolProp(writer, classId, "Looped", instances.map { it.props["Looped"] as Boolean })
+                writeBoolProp(writer, classId, "Playing", instances.map { it.props["Playing"] as Boolean })
+                writeBoolProp(writer, classId, "PlayOnRemove", instances.map { it.props["PlayOnRemove"] as Boolean })
+                writeDoubleProp(writer, classId, "TimePosition", instances.map { it.props["TimePosition"] as Double })
+                writeFloatProp(writer, classId, "RollOffMinDistance", instances.map { it.props["RollOffMinDistance"] as Float })
+                writeFloatProp(writer, classId, "RollOffMaxDistance", instances.map { it.props["RollOffMaxDistance"] as Float })
+                writeEnumProp(writer, classId, "RollOffMode", instances.map { it.props["RollOffMode"] as Int })
+            }
+            "PointLight", "SpotLight", "SurfaceLight" -> {
+                writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as Float })
+                writeColor3Prop(writer, classId, "Color", instances.map { it.props["Color"] as RgbColor })
+                writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as Boolean })
+                writeFloatProp(writer, classId, "Range", instances.map { it.props["Range"] as Float })
+                writeBoolProp(writer, classId, "Shadows", instances.map { it.props["Shadows"] as Boolean })
+                if (className != "PointLight") {
+                    writeFloatProp(writer, classId, "Angle", instances.map { it.props["Angle"] as Float })
+                    writeEnumProp(writer, classId, "Face", instances.map { it.props["Face"] as Int })
+                }
+            }
+        }
+
+        if (className in USER_NODE_CLASSES) {
+            writeInt64Prop(writer, classId, "SourceAssetId", instances.map { it.props["SourceAssetId"] as? Long ?: -1L })
+            writeStringProp(writer, classId, "Tags", instances.map { it.props["Tags"] as? String ?: "" })
         }
 
         if (className == "SpawnLocation") {
@@ -319,6 +441,13 @@ object RobloxPlaceBinarySerializer {
                 chunk.writeUInt8((value shr 8) and 0xFF)
                 chunk.writeUInt8(value and 0xFF)
             }
+        }
+
+    private fun writeColor3Prop(writer: BinaryWriter, classId: Int, name: String, values: List<RgbColor>) =
+        writeProp(writer, classId, name, TYPE_COLOR3) { chunk ->
+            chunk.writeInterleavedFloats(values.map { it.r }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.g }.toFloatArray())
+            chunk.writeInterleavedFloats(values.map { it.b }.toFloatArray())
         }
 
     private fun writeDoubleProp(writer: BinaryWriter, classId: Int, name: String, values: List<Double>) =
@@ -415,6 +544,24 @@ object RobloxPlaceBinarySerializer {
         return (0xFF shl 24) or value
     }
 
+    private fun colorRgbFromHex(hex: String): RgbColor {
+        val value = hex.removePrefix("#").padEnd(6, '0').take(6).toIntOrNull(16) ?: 0xFFFFFF
+        return RgbColor(
+            ((value shr 16) and 0xFF) / 255f,
+            ((value shr 8) and 0xFF) / 255f,
+            (value and 0xFF) / 255f
+        )
+    }
+
+    private fun faceToken(face: String): Int = when (face.lowercase()) {
+        "right" -> 0
+        "top" -> 1
+        "back" -> 2
+        "left" -> 3
+        "bottom" -> 4
+        else -> 5
+    }
+
     private fun randomUniqueId(): String = UUID.randomUUID().toString().replace("-", "")
 
     private fun materialToken(material: String): Int = when (material) {
@@ -458,6 +605,7 @@ object RobloxPlaceBinarySerializer {
     }
 
     private data class CFrameValue(val position: Vector3, val rotation: FloatArray)
+    private data class RgbColor(val r: Float, val g: Float, val b: Float)
 
     private class BinaryWriter {
         private val out = ByteArrayOutputStream()
@@ -612,6 +760,7 @@ object RobloxPlaceBinarySerializer {
     private const val TYPE_INT32 = 0x03
     private const val TYPE_FLOAT32 = 0x04
     private const val TYPE_DOUBLE = 0x05
+    private const val TYPE_COLOR3 = 0x0C
     private const val TYPE_PHYSICALPROPS = 0x19
     private const val TYPE_COLOR3UINT8 = 0x1A
     private const val TYPE_VECTOR3 = 0x0E
@@ -619,4 +768,9 @@ object RobloxPlaceBinarySerializer {
     private const val TYPE_ENUM = 0x12
     private const val TYPE_INT64 = 0x1B
     private const val TYPE_UNIQUEID = 0x1F
+
+    private val USER_NODE_CLASSES = setOf(
+        "Script", "LocalScript", "ModuleScript", "Attachment", "RemoteEvent",
+        "Sound", "PointLight", "SpotLight", "SurfaceLight"
+    )
 }

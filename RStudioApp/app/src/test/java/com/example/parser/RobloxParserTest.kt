@@ -1,6 +1,7 @@
 package com.example.parser
 
 import com.example.models.Part
+import com.example.models.StudioNode
 import com.example.models.Vector3
 import com.example.publish.RobloxPlaceBinarySerializer
 import com.example.publish.RobloxPlaceXmlSerializer
@@ -249,5 +250,42 @@ class RobloxParserTest {
         assertEquals(Vector3(4f, 5f, 6f), roundTripped.size)
         assertEquals(Vector3(1f, 2f, 3f), roundTripped.position)
         assertEquals(Part.MATERIAL_NEON, roundTripped.material)
+    }
+
+    @Test
+    fun serializedPublishRbxlPreservesExtendedStudioNodes() {
+        val nodes = listOf(
+            StudioNode("attachment", "Attachment", StudioNode.CLASS_ATTACHMENT, "part", nodeProperties = mapOf("Visible" to "true")),
+            StudioNode("module", "SharedModule", StudioNode.CLASS_MODULE_SCRIPT, StudioNode.CLASS_REPLICATED_STORAGE, scriptSource = "return {}"),
+            StudioNode("remote", "RemoteEvent", StudioNode.CLASS_REMOTE_EVENT, StudioNode.CLASS_REPLICATED_STORAGE),
+            StudioNode("sound", "Sound", StudioNode.CLASS_SOUND, "part", nodeProperties = mapOf("SoundId" to "rbxassetid://1", "Volume" to "0.75")),
+            StudioNode("point", "PointLight", StudioNode.CLASS_POINT_LIGHT, "part"),
+            StudioNode("spot", "SpotLight", StudioNode.CLASS_SPOT_LIGHT, "part"),
+            StudioNode("surface", "SurfaceLight", StudioNode.CLASS_SURFACE_LIGHT, "part")
+        )
+        val part = Part(
+            id = "part",
+            name = "HostPart",
+            position = Vector3.Zero,
+            size = Vector3(4f, 1f, 4f),
+            anchored = true
+        )
+
+        val bytes = RobloxPlaceBinarySerializer.serialize("Extended Nodes", listOf(part), nodes)
+        val roundTrip = RobloxParser.instancesToStudioNodes(RobloxParser.parseRobloxFile(bytes))
+        val classes = roundTrip.map { it.className }.toSet()
+
+        assertTrue(StudioNode.CLASS_ATTACHMENT in classes)
+        assertTrue(StudioNode.CLASS_MODULE_SCRIPT in classes)
+        assertTrue(StudioNode.CLASS_REMOTE_EVENT in classes)
+        assertTrue(StudioNode.CLASS_SOUND in classes)
+        assertTrue(StudioNode.CLASS_POINT_LIGHT in classes)
+        assertTrue(StudioNode.CLASS_SPOT_LIGHT in classes)
+        assertTrue(StudioNode.CLASS_SURFACE_LIGHT in classes)
+        val host = roundTrip.first { it.name == "HostPart" }
+        val attachment = roundTrip.first { it.className == StudioNode.CLASS_ATTACHMENT }
+        val module = roundTrip.first { it.className == StudioNode.CLASS_MODULE_SCRIPT }
+        assertEquals(host.id, attachment.parentId)
+        assertEquals("return {}", module.scriptSource)
     }
 }

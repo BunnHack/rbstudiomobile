@@ -30,7 +30,7 @@ data class StudioNode(
     val isDecal: Boolean get() = className == "Decal"
     val isTexture: Boolean get() = className == "Texture"
     val isWeld: Boolean get() = className == "Weld" || className == "WeldConstraint"
-    val isScript: Boolean get() = className == "Script" || className == "LocalScript" || scriptSource.isNotEmpty()
+    val isScript: Boolean get() = className in SCRIPT_CLASS_NAMES || scriptSource.isNotEmpty()
     val isGuiObject: Boolean get() = className in GUI_CLASS_NAMES
     val isGuiContainer: Boolean get() = className in GUI_CONTAINER_CLASS_NAMES
     val isLighting: Boolean get() = className == "Lighting"
@@ -41,6 +41,7 @@ data class StudioNode(
         const val CLASS_MODEL = "Model"
         const val CLASS_SCRIPT = "Script"
         const val CLASS_LOCAL_SCRIPT = "LocalScript"
+        const val CLASS_MODULE_SCRIPT = "ModuleScript"
         const val CLASS_DECAL = "Decal"
         const val CLASS_TEXTURE = "Texture"
         const val CLASS_WELD = "Weld"
@@ -55,6 +56,12 @@ data class StudioNode(
         const val CLASS_IMAGE_LABEL = "ImageLabel"
         const val CLASS_IMAGE_BUTTON = "ImageButton"
         const val CLASS_SCROLLING_FRAME = "ScrollingFrame"
+        const val CLASS_ATTACHMENT = "Attachment"
+        const val CLASS_REMOTE_EVENT = "RemoteEvent"
+        const val CLASS_SOUND = "Sound"
+        const val CLASS_POINT_LIGHT = "PointLight"
+        const val CLASS_SPOT_LIGHT = "SpotLight"
+        const val CLASS_SURFACE_LIGHT = "SurfaceLight"
 
         // Service class names
         const val CLASS_WORKSPACE = "Workspace"
@@ -73,6 +80,12 @@ data class StudioNode(
             CLASS_IMAGE_LABEL,
             CLASS_IMAGE_BUTTON,
             CLASS_SCROLLING_FRAME
+        )
+
+        val SCRIPT_CLASS_NAMES: Set<String> = setOf(
+            CLASS_SCRIPT,
+            CLASS_LOCAL_SCRIPT,
+            CLASS_MODULE_SCRIPT
         )
 
         val GUI_CONTAINER_CLASS_NAMES: Set<String> = setOf(

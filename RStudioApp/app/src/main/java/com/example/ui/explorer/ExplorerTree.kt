@@ -115,6 +115,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Wedge", Lucide.Triangle, Color(0xFFAAAAAA), "Frequently Used", StudioNode.CLASS_WEDGE_PART),
     InsertableObject("Script", Lucide.FileCode, Color(0xFFEEEEEE), "Frequently Used", StudioNode.CLASS_SCRIPT),
     InsertableObject("LocalScript", Lucide.FileCode, Color(0xFF9BD5FF), "Frequently Used", StudioNode.CLASS_LOCAL_SCRIPT),
+    InsertableObject("ModuleScript", Lucide.FileCode, Color(0xFF67D38B), "Frequently Used", StudioNode.CLASS_MODULE_SCRIPT),
     InsertableObject("Folder", Lucide.Folder, Color(0xFFFFD700), "Frequently Used", StudioNode.CLASS_FOLDER),
     InsertableObject("SpawnLocation", Lucide.Sparkles, Color(0xFFFFD700), "Frequently Used", StudioNode.CLASS_SPAWN_LOCATION),
     InsertableObject("Model", Lucide.Layers, Color(0xFFFF69B4), "Frequently Used", StudioNode.CLASS_MODEL),
@@ -131,7 +132,13 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Weld", Lucide.Maximize2, Color(0xFFFFA726), "3D Interfaces", StudioNode.CLASS_WELD),
     InsertableObject("ClickDetector", Lucide.MousePointerClick, Color(0xFF00FFAA), "3D Interfaces", "ClickDetector"),
     InsertableObject("ProximityPrompt", Lucide.Hand, Color(0xFF00FFAA), "3D Interfaces", "ProximityPrompt"),
-    InsertableObject("Dialog", Lucide.MessageSquare, Color(0xFF00A2FF), "3D Interfaces", "Dialog")
+    InsertableObject("Dialog", Lucide.MessageSquare, Color(0xFF00A2FF), "3D Interfaces", "Dialog"),
+    InsertableObject("Attachment", Lucide.Maximize2, Color(0xFFFFC857), "3D Interfaces", StudioNode.CLASS_ATTACHMENT),
+    InsertableObject("Sound", Lucide.Sparkles, Color(0xFF9B8CFF), "Effects", StudioNode.CLASS_SOUND),
+    InsertableObject("PointLight", Lucide.Sun, Color(0xFFFFF176), "Effects", StudioNode.CLASS_POINT_LIGHT),
+    InsertableObject("SpotLight", Lucide.Sun, Color(0xFFFFD54F), "Effects", StudioNode.CLASS_SPOT_LIGHT),
+    InsertableObject("SurfaceLight", Lucide.Sun, Color(0xFFFFB74D), "Effects", StudioNode.CLASS_SURFACE_LIGHT),
+    InsertableObject("RemoteEvent", Lucide.Sparkles, Color(0xFF80CBC4), "Communication", StudioNode.CLASS_REMOTE_EVENT)
 )
 
 // === Tree types ===
@@ -208,6 +215,10 @@ private fun iconForNode(node: StudioNode): ImageVector = when {
     node.isTexture -> Lucide.Image
     node.isWeld -> Lucide.Maximize2
     node.isScript -> Lucide.FileCode
+    node.className == StudioNode.CLASS_ATTACHMENT -> Lucide.Maximize2
+    node.className == StudioNode.CLASS_SOUND -> Lucide.Sparkles
+    node.className in setOf(StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT) -> Lucide.Sun
+    node.className == StudioNode.CLASS_REMOTE_EVENT -> Lucide.Sparkles
     node.isGuiObject -> when (node.className) {
         StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON -> Lucide.Image
         StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON -> Lucide.Code
@@ -230,6 +241,10 @@ private fun colorForNode(node: StudioNode): Color = when {
     node.isTexture -> Color(0xFF00D0A2)
     node.isWeld -> Color(0xFFFFA726)
     node.isScript -> Color(0xFFEEEEEE)
+    node.className == StudioNode.CLASS_ATTACHMENT -> Color(0xFFFFC857)
+    node.className == StudioNode.CLASS_SOUND -> Color(0xFF9B8CFF)
+    node.className in setOf(StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT) -> Color(0xFFFFD54F)
+    node.className == StudioNode.CLASS_REMOTE_EVENT -> Color(0xFF80CBC4)
     node.isGuiObject -> Color(0xFF83C7FF)
     else -> NodeIconColor
 }
