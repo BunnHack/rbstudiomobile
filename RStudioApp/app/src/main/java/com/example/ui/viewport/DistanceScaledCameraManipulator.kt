@@ -3,6 +3,7 @@ package com.example.ui.viewport
 import com.google.android.filament.utils.Manipulator
 import io.github.sceneview.gesture.CameraGestureDetector
 import io.github.sceneview.gesture.transform
+import io.github.sceneview.math.Position
 import io.github.sceneview.math.Transform
 import kotlin.math.exp
 import kotlin.math.ln
@@ -19,12 +20,17 @@ import kotlin.math.sqrt
  * proportional to how far out you're zoomed.
  */
 class DistanceScaledCameraManipulator(
+    initialEye: Position,
+    targetPosition: Position = Position(0f, 0f, 0f),
     referenceDistance: Float = 20f
 ) : CameraGestureDetector.CameraManipulator {
 
     private val inner = Manipulator.Builder()
-        .orbitSpeed(0.006f, 0.006f)
-        .zoomSpeed(0.05f)
+        .orbitHomePosition(initialEye.x, initialEye.y, initialEye.z)
+        .targetPosition(targetPosition.x, targetPosition.y, targetPosition.z)
+        .orbitSpeed(0.008f, 0.008f)
+        .zoomSpeed(0.20f)
+        .panning(true)
         .build(Manipulator.Mode.ORBIT)
 
     private val reference = referenceDistance.coerceAtLeast(0.5f)
@@ -38,7 +44,9 @@ class DistanceScaledCameraManipulator(
         val dy = eye[1] - target[1]
         val dz = eye[2] - target[2]
         val dist = sqrt(dx * dx + dy * dy + dz * dz)
-        return max(dist, 0.5f) / reference
+        // Never slow the default response down. Far-away cameras accelerate up to
+        // 12x so large scenes remain practical to navigate.
+        return (max(dist, 0.5f) / reference).coerceIn(1f, 12f)
     }
 
     override fun setViewport(width: Int, height: Int) = inner.setViewport(width, height)
@@ -76,7 +84,9 @@ class DistanceScaledCameraManipulator(
     }
 
     private companion object {
-        const val PINCH_ZOOM_SPEED = 1f / 18f
-        const val PINCH_ZOOM_DAMPING = 0.85f
+        // SceneView defaults to 1/18 with zoomSpeed=0.05. Combined with this
+        // zoomSpeed=0.20, the response is about 22x faster at the reference distance.
+        const val PINCH_ZOOM_SPEED = 0.30f
+        const val PINCH_ZOOM_DAMPING = 0.9f
     }
 }

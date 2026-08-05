@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -124,10 +125,6 @@ private fun CodeEditorPane(
     modifier: Modifier = Modifier
 ) {
     val horizontalScroll = rememberScrollState()
-    val lineNumbers = remember(lineCount) {
-        (1..lineCount).joinToString("\n") { it.toString() }
-    }
-
     // Gutter + code scroll vertically TOGETHER on one shared ScrollState, so the line
     // numbers can never drift from the text. The Row is forced to at least the pane's
     // measured height so short files still fill the editor (otherwise the Row only
@@ -137,6 +134,16 @@ private fun CodeEditorPane(
         modifier = modifier.fillMaxSize().background(EditorBackground)
     ) {
         val paneHeight = maxHeight
+        val lineHeightDp = with(LocalDensity.current) { 19.sp.toDp() }
+        // Editors conventionally show virtual line numbers beyond EOF. Fill the
+        // visible viewport so a 2-line script doesn't leave the gutter ending at 3.
+        val visibleLineCount = max(
+            lineCount,
+            (paneHeight / lineHeightDp).toInt().coerceAtLeast(1)
+        )
+        val lineNumbers = remember(visibleLineCount) {
+            (1..visibleLineCount).joinToString("\n") { it.toString() }
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -169,7 +176,9 @@ private fun CodeEditorPane(
                 ),
                 modifier = Modifier
                     .weight(1f)
+                    .fillMaxHeight()
                     .horizontalScroll(horizontalScroll)
+                    .heightIn(min = paneHeight)
                     .padding(top = 8.dp, start = 10.dp, end = 20.dp, bottom = 18.dp)
             )
         }

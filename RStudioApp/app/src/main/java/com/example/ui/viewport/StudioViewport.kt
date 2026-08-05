@@ -25,7 +25,6 @@ import io.github.sceneview.node.PlaneNode
 import io.github.sceneview.node.SphereNode
 import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.node.LineNode
-import io.github.sceneview.rememberCameraManipulator
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
@@ -70,6 +69,13 @@ fun StudioViewport(
     val materialLoader = rememberMaterialLoader(engine)
     val environmentLoader = rememberEnvironmentLoader(engine)
     val cameraNode = rememberCameraNode(engine)
+
+    val initialCameraPosition = remember {
+        orbitCameraPosition(yaw = yaw, pitch = pitch, distance = zoom)
+    }
+    val cameraManipulator = remember {
+        DistanceScaledCameraManipulator(initialEye = initialCameraPosition)
+    }
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember { RobloxTextureLoader(engine, OkHttpClient()) }
@@ -122,9 +128,7 @@ fun StudioViewport(
         // fixed speeds feel frozen on large scenes. We scale grab (orbit/pan) and
         // pinch-zoom deltas by the current camera-to-target distance so dragging is
         // proportional to how far you're zoomed out.
-        cameraManipulator = rememberCameraManipulator(
-            creator = { DistanceScaledCameraManipulator() }
-        ),
+        cameraManipulator = cameraManipulator,
         onTouchEvent = { event, hitResult ->
             if (event.action == MotionEvent.ACTION_UP) {
                 val partId = hitResult?.node?.name?.removePrefix("part:")
@@ -402,4 +406,15 @@ private fun colorB(hex: String): Float = (parseHex(hex) and 0xFF) / 255f
 private fun parseHex(hex: String): Int {
     val rgb = hex.removePrefix("#").padEnd(6, '0').take(6)
     return runCatching { rgb.toInt(16) }.getOrDefault(0xCCCCCC)
+}
+
+private fun orbitCameraPosition(yaw: Float, pitch: Float, distance: Float): Position {
+    val yawR = Math.toRadians(yaw.toDouble())
+    val pitchR = Math.toRadians(pitch.toDouble().coerceIn(-89.0, 89.0))
+    val dist = distance.coerceAtLeast(0.5f)
+    return Position(
+        (dist * cos(pitchR) * sin(yawR)).toFloat(),
+        (dist * sin(pitchR)).toFloat(),
+        (dist * cos(pitchR) * cos(yawR)).toFloat()
+    )
 }
