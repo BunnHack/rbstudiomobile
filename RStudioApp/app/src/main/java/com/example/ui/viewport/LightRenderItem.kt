@@ -23,7 +23,7 @@ data class LocalLightRenderItem(
 
 fun buildRenderableLights(nodes: List<StudioNode>, parts: List<Part>): List<LocalLightRenderItem> {
     val partsById = parts.associateBy { it.id }
-    val nodePartIds = nodes.mapNotNull { node -> node.part?.let { node.id to it.id } }.toMap()
+    val nodesById = nodes.associateBy { it.id }
 
     return nodes.mapNotNull { node ->
         val type = when (node.className) {
@@ -32,15 +32,14 @@ fun buildRenderableLights(nodes: List<StudioNode>, parts: List<Part>): List<Loca
             StudioNode.CLASS_SURFACE_LIGHT -> LocalLightType.SURFACE
             else -> return@mapNotNull null
         }
-        val parentPartId = node.parentId?.let { nodePartIds[it] ?: it } ?: return@mapNotNull null
-        val part = partsById[parentPartId] ?: return@mapNotNull null
+        val part = resolveHostPart(node.parentId, nodesById, partsById) ?: return@mapNotNull null
         val face = node.prop("Face", "Front")
         val localDirection = faceDirection(face)
-        val worldDirection = rotateDirection(localDirection, part.rotation)
+        val worldDirection = rotateDirection(localDirection, part.currentRotation)
         val position = if (type == LocalLightType.POINT) {
-            part.position
+            part.currentPosition
         } else {
-            part.position + rotateDirection(faceOffset(face, part.size), part.rotation)
+            part.currentPosition + rotateDirection(faceOffset(face, part.size), part.currentRotation)
         }
         LocalLightRenderItem(
             id = node.id,
@@ -80,7 +79,7 @@ private fun faceOffset(face: String, size: Vector3): Vector3 = when (face.lowerc
     else -> Vector3(0f, 0f, size.z / 2f)
 }
 
-private fun rotateDirection(direction: Vector3, rotation: Vector3): Vector3 {
+internal fun rotateDirection(direction: Vector3, rotation: Vector3): Vector3 {
     val rx = Math.toRadians(rotation.x.toDouble())
     val ry = Math.toRadians(rotation.y.toDouble())
     val rz = Math.toRadians(rotation.z.toDouble())
@@ -95,4 +94,20 @@ private fun rotateDirection(direction: Vector3, rotation: Vector3): Vector3 {
         direction.x * cy * sz + direction.y * (cx * cz + sx * sy * sz) + direction.z * (cx * sy * sz - cz * sx),
         direction.x * -sy + direction.y * cy * sx + direction.z * cx * cy
     )
+}
+
+internal fun resolveHostPart(
+    parentId: String?,
+    nodesById: Map<String, StudioNode>,
+    partsById: Map<String, Part>
+): Part? {
+    var currentId = parentId
+    val visited = mutableSetOf<String>()
+    while (currentId != null && visited.add(currentId)) {
+        partsById[currentId]?.let { return it }
+        val node = nodesById[currentId] ?: return null
+        node.part?.let { part -> return partsById[part.id] ?: part }
+        currentId = node.parentId
+    }
+    return null
 }

@@ -82,4 +82,15 @@ class StudioNodeGraphTest {
 
         assertNull(resolved)
     }
+
+    @Test
+    fun fallbackNodesPreserveSpecialPartClasses() {
+        val truss = Part("truss", "Truss", shape = Part.SHAPE_TRUSS)
+        val corner = Part("corner", "Corner", shape = Part.SHAPE_CORNER_WEDGE)
+
+        val nodes = StudioNodeGraph.syncPartBackedNodes(emptyList(), listOf(truss, corner)).associateBy { it.part?.id }
+
+        assertEquals(StudioNode.CLASS_TRUSS_PART, nodes.getValue("truss").className)
+        assertEquals(StudioNode.CLASS_CORNER_WEDGE_PART, nodes.getValue("corner").className)
+    }
 }

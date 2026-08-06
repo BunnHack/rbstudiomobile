@@ -13,12 +13,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.example.models.Part
 import com.example.viewmodels.StudioViewModel
 import com.google.android.filament.Texture
 import com.google.android.filament.LightManager
+import com.google.android.filament.Skybox
+import com.google.android.filament.View
 import io.github.sceneview.SceneScope
 import io.github.sceneview.SceneView
+import io.github.sceneview.SurfaceType
+import io.github.sceneview.environment.Environment
 import io.github.sceneview.geometries.UvScale
 import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Position
@@ -32,10 +37,13 @@ import io.github.sceneview.node.SphereNode
 import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.node.LineNode
 import io.github.sceneview.node.TorusNode
+import io.github.sceneview.node.TextNode
+import io.github.sceneview.node.LightNode
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberCollisionSystem
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberEnvironmentLoader
+import io.github.sceneview.rememberEnvironment
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
 import io.github.sceneview.rememberView
@@ -72,15 +80,77 @@ fun StudioViewport(
     val activeTool by viewModel.activeTool.collectAsState()
     val nodes by viewModel.explorerNodes.collectAsState()
     val roblosecurityCookie by viewModel.roblosecurityCookie.collectAsState()
+    val context = LocalContext.current
     val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
     val lights = remember(nodes, parts) { buildRenderableLights(nodes, parts) }
+    val ribbons = remember(nodes, parts) { buildRibbonEffects(nodes, parts) }
+    val particleEmitters = remember(nodes, parts) { buildParticleEmitters(nodes, parts) }
+    val surfaceGuis = remember(nodes, parts) { buildSurfaceGuis(nodes, parts) }
+    val lightingNode = nodes.lastOrNull { it.className == com.example.models.StudioNode.CLASS_LIGHTING }
+    val lightingBrightness = lightingNode?.nodeProperties?.entries
+        ?.firstOrNull { it.key.equals("Brightness", true) }?.value?.toFloatOrNull()?.coerceIn(0f, 10f) ?: 2f
+    val globalShadows = lightingNode?.nodeProperties?.entries
+        ?.firstOrNull { it.key.equals("GlobalShadows", true) }?.value?.toBooleanStrictOrNull() ?: true
+    val skyNode = nodes.lastOrNull { it.className == com.example.models.StudioNode.CLASS_SKY }
+    val showSky = skyNode != null
+    val skyFaces = remember(skyNode) {
+        skyNode?.let { node ->
+            listOf("SkyboxRt", "SkyboxLf", "SkyboxUp", "SkyboxDn", "SkyboxBk", "SkyboxFt")
+                .map { keyName -> node.nodeProperties.entries.firstOrNull { it.key.equals(keyName, true) }?.value.orEmpty() }
+                .takeIf { faces -> faces.all(String::isNotBlank) }
+        }
+    }
 
     val engine = rememberEngine()
-    val view = rememberView(engine)
+    val view = rememberView(engine) {
+        io.github.sceneview.createView(engine).apply {
+            ambientOcclusionOptions = ambientOcclusionOptions.apply { enabled = false }
+            antiAliasing = View.AntiAliasing.FXAA
+            multiSampleAntiAliasingOptions = View.MultiSampleAntiAliasingOptions().apply {
+                enabled = true
+                sampleCount = 4
+            }
+            dithering = View.Dithering.NONE
+        }
+    }
     val modelLoader = rememberModelLoader(engine)
     val materialLoader = rememberMaterialLoader(engine)
     val environmentLoader = rememberEnvironmentLoader(engine)
-    val cameraNode = rememberCameraNode(engine)
+    val cameraNode = rememberCameraNode(engine) {
+        near = 0.1f
+        far = 20_000f
+    }
+    val baseEnvironment = rememberEnvironment(environmentLoader, key = showSky) {
+        environmentLoader.createKTX1Environment(
+            "environments/neutral/neutral_ibl.ktx",
+            if (showSky) "environments/neutral/neutral_skybox.ktx" else null
+        ).also { it.indirectLight?.setIntensity((lightingBrightness * 15_000f).coerceAtLeast(1_000f)) }
+    }
+    val mainLightNode = remember(engine) {
+        LightNode(
+            engine = engine,
+            type = LightManager.Type.SUN,
+            apply = {
+                direction(-0.35f, -0.85f, -0.4f)
+                intensity(lightingBrightness * 25_000f)
+                castShadows(globalShadows)
+                sunAngularRadius(1.2f)
+                shadowOptions(com.google.android.filament.LightManager.ShadowOptions().apply {
+                    mapSize = 2048
+                    shadowCascades = 4
+                    normalBias = 1.2f
+                    constantBias = 0.003f
+                    stable = true
+                    screenSpaceContactShadows = false
+                    maxShadowDistance = 500f
+                })
+            }
+        )
+    }
+    LaunchedEffect(mainLightNode, lightingBrightness, globalShadows) {
+        mainLightNode.intensity = lightingBrightness * 25_000f
+        mainLightNode.isShadowCaster = globalShadows
+    }
     val collisionSystem = rememberCollisionSystem(view)
     val cameraManipulator = remember {
         DistanceScaledCameraManipulator(
@@ -91,7 +161,8 @@ fun StudioViewport(
     var gizmoCameraDistance by remember { mutableFloatStateOf(zoom.coerceAtLeast(0.5f)) }
 
     val scope = rememberCoroutineScope()
-    val textureLoader = remember { RobloxTextureLoader(engine, OkHttpClient()) }
+    val textureLoader = remember(engine, context) { RobloxTextureLoader(engine, OkHttpClient(), context.assets) }
+    var customSkybox by remember { mutableStateOf<Skybox?>(null) }
     // Loaded decal textures by "uri|repeat"; populated asynchronously.
     val decalTextures = remember { mutableStateMapOf<String, Texture>() }
 
@@ -99,9 +170,18 @@ fun StudioViewport(
         textureLoader.roblosecurityCookie = roblosecurityCookie
     }
 
+    LaunchedEffect(skyFaces, roblosecurityCookie) {
+        customSkybox = skyFaces?.let { textureLoader.loadSkybox(it) }
+    }
+
+    val environment = remember(baseEnvironment, customSkybox) {
+        customSkybox?.let { Environment(baseEnvironment.indirectLight, it, baseEnvironment.sphericalHarmonics) }
+            ?: baseEnvironment
+    }
+
     // Kick off async texture loads for any decal that isn't loaded yet.
     decals.forEach { decal ->
-        val key = decal.textureUri
+        val key = decal.textureCacheKey()
         if (!decalTextures.containsKey(key)) {
             scope.launch {
                 textureLoader.load(
@@ -125,10 +205,14 @@ fun StudioViewport(
 
     SceneView(
         modifier = modifier,
+        surfaceType = SurfaceType.TextureSurface,
         engine = engine,
         modelLoader = modelLoader,
         materialLoader = materialLoader,
         environmentLoader = environmentLoader,
+        environment = environment,
+        mainLightNode = mainLightNode,
+        fillLightNode = null,
         view = view,
         cameraNode = cameraNode,
         collisionSystem = collisionSystem,
@@ -190,25 +274,99 @@ fun StudioViewport(
         }
     ) {
         parts.forEach { part ->
-            PartNode(
-                materialLoader = materialLoader,
-                part = part,
-                onSelect = { viewModel.selectPart(part) }
-            )
+            key(
+                part.id, part.shape, part.trussStyle, part.currentPosition, part.currentRotation, part.size,
+                part.colorHex, part.material, part.transparency, part.reflectance, part.castShadow
+            ) {
+                PartNode(
+                    materialLoader = materialLoader,
+                    part = part,
+                    onSelect = { viewModel.selectPart(part) }
+                )
+            }
         }
 
         // Decal / Texture overlays on part faces.
         val partsById = parts.associateBy { it.id }
         decals.sortedBy { it.zIndex }.forEach { decal ->
             val part = partsById[decal.parentPartId] ?: return@forEach
-            val tex = decalTextures[decal.textureUri] ?: return@forEach
-            DecalNode(materialLoader, decal, part, tex)
+            val tex = decalTextures[decal.textureCacheKey()] ?: return@forEach
+            key(decal, part.currentPosition, part.currentRotation, part.size, tex) {
+                DecalNode(materialLoader, decal, part, tex)
+            }
         }
 
         lights.forEach { light ->
-            key(light.id, light.type, light.range, light.angleDegrees, light.shadows) {
+            key(light) {
                 RobloxLightNode(light)
             }
+        }
+
+
+        ribbons.filter { it.enabled }.forEach { ribbon ->
+            val material = remember(ribbon.id, ribbon.colorHex, ribbon.transparency) {
+                materialLoader.createUnlitColorInstance(
+                    dev.romainguy.kotlin.math.Float4(
+                        colorR(ribbon.colorHex), colorG(ribbon.colorHex), colorB(ribbon.colorHex),
+                        1f - ribbon.transparency
+                    )
+                )
+            }
+            LineNode(
+                start = Position(ribbon.start.x, ribbon.start.y, ribbon.start.z),
+                end = Position(ribbon.end.x, ribbon.end.y, ribbon.end.z),
+                materialInstance = material,
+                apply = {
+                    name = "ribbon:${ribbon.id}"
+                    scale = Scale(1f, ribbon.width, ribbon.width)
+                }
+            )
+        }
+
+        particleEmitters.filter { it.enabled }.forEach { emitter ->
+            val material = remember(emitter.id, emitter.colorHex, emitter.transparency) {
+                materialLoader.createUnlitColorInstance(
+                    dev.romainguy.kotlin.math.Float4(
+                        colorR(emitter.colorHex), colorG(emitter.colorHex), colorB(emitter.colorHex),
+                        1f - emitter.transparency
+                    )
+                )
+            }
+            repeat(emitter.count) { index ->
+                val angle = index * 2.3999632f
+                val radius = 0.25f + (index % 4) * 0.15f
+                SphereNode(
+                    radius = emitter.size * 0.08f,
+                    materialInstance = material,
+                    position = Position(
+                        emitter.origin.x + cos(angle) * radius,
+                        emitter.origin.y + 0.25f + index * 0.08f,
+                        emitter.origin.z + sin(angle) * radius
+                    ),
+                    apply = { name = "particle:${emitter.id}:$index" }
+                )
+            }
+        }
+
+        surfaceGuis.filter { it.enabled }.forEach { gui ->
+            TextNode(
+                text = gui.text,
+                fontSize = 64f,
+                textColor = android.graphics.Color.rgb(
+                    (colorR(gui.textColorHex) * 255).toInt(),
+                    (colorG(gui.textColorHex) * 255).toInt(),
+                    (colorB(gui.textColorHex) * 255).toInt()
+                ),
+                backgroundColor = android.graphics.Color.TRANSPARENT,
+                widthMeters = 2f,
+                heightMeters = gui.height,
+                position = Position(gui.position.x, gui.position.y, gui.position.z),
+                scale = Scale((gui.width / 2f).coerceAtLeast(0.05f), 1f, 1f),
+                apply = {
+                    name = "surface-gui:${gui.id}"
+                    rotation = Rotation(gui.rotation.x, gui.rotation.y, gui.rotation.z)
+                }
+            )
         }
 
         // Selection highlight: a transparent cyan cube slightly larger than the part.
@@ -234,7 +392,10 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
         position = Position(light.position.x, light.position.y, light.position.z),
         direction = Direction(light.direction.x, light.direction.y, light.direction.z),
         color = dev.romainguy.kotlin.math.Float4(
-            colorR(light.colorHex), colorG(light.colorHex), colorB(light.colorHex), 1f
+            srgbToLinear(colorR(light.colorHex)),
+            srgbToLinear(colorG(light.colorHex)),
+            srgbToLinear(colorB(light.colorHex)),
+            1f
         ),
         apply = {
             falloff(light.range)
@@ -245,12 +406,11 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
         },
         nodeApply = {
             name = "light:${light.id}"
-            isVisible = light.enabled
         }
     )
 }
 
-private const val LOCAL_LIGHT_INTENSITY_SCALE = 1000f
+private const val LOCAL_LIGHT_INTENSITY_SCALE = 4_000f
 
 @Composable
 private fun SceneScope.PartNode(
@@ -258,16 +418,20 @@ private fun SceneScope.PartNode(
     part: Part,
     onSelect: () -> Unit
 ) {
-    val material = remember(part.colorHex, part.transparency) {
-        materialLoader.createColorInstance(
-            dev.romainguy.kotlin.math.Float4(
-                colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex),
-                1f - part.transparency.coerceIn(0f, 1f)
-            )
+    val appearance = remember(part.material, part.reflectance) { materialAppearance(part) }
+    val material = remember(part.colorHex, part.transparency, appearance) {
+        val color = dev.romainguy.kotlin.math.Float4(
+            colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex),
+            1f - part.transparency.coerceIn(0f, 1f)
         )
+        if (appearance.unlit) {
+            materialLoader.createUnlitColorInstance(color)
+        } else {
+            materialLoader.createColorInstance(color, appearance.metallic, appearance.roughness, appearance.reflectance)
+        }
     }
-    val position = Position(part.position.x, part.position.y, part.position.z)
-    val rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
+    val position = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z)
+    val rotation = Rotation(part.currentRotation.x, part.currentRotation.y, part.currentRotation.z)
     val scale = Scale(part.size.x, part.size.y, part.size.z)
 
     val editConfig: io.github.sceneview.node.Node.() -> Unit = {
@@ -276,6 +440,11 @@ private fun SceneScope.PartNode(
         // Transform editing is owned by the visible axis gizmo below. Keeping direct
         // node editing disabled prevents object gestures from fighting camera gestures.
         isEditable = false
+        if (this is io.github.sceneview.node.RenderableNode) {
+            isShadowCaster = part.castShadow
+            isShadowReceiver = true
+            setScreenSpaceContactShadows(false)
+        }
     }
 
     when (part.shape) {
@@ -302,6 +471,22 @@ private fun SceneScope.PartNode(
             position = position,
             rotation = rotation,
             scale = scale,
+            apply = editConfig
+        )
+        Part.SHAPE_CORNER_WEDGE -> CornerWedgeNode(
+            engine = engine,
+            materialInstance = material,
+            position = position,
+            rotation = rotation,
+            scale = scale,
+            apply = editConfig
+        )
+        Part.SHAPE_TRUSS -> TrussNode(
+            engine = engine,
+            materialInstance = material,
+            part = part,
+            position = position,
+            rotation = rotation,
             apply = editConfig
         )
         else -> CubeNode(
@@ -347,27 +532,197 @@ private fun SceneScope.WedgeNode(
 private fun buildWedgeGeometry(engine: com.google.android.filament.Engine): io.github.sceneview.geometries.Geometry {
     // Unit wedge: square base, vertical front face, slanted back->front-top face.
     // x: left(-)/right(+), y: down(-)/up(+), z: front(-)/back(+)
-    val v = listOf(
-        Position(-0.5f, -0.5f, -0.5f), // 0 front-bottom-left
-        Position(0.5f, -0.5f, -0.5f),  // 1 front-bottom-right
-        Position(0.5f, -0.5f, 0.5f),   // 2 back-bottom-right
-        Position(-0.5f, -0.5f, 0.5f),  // 3 back-bottom-left
-        Position(-0.5f, 0.5f, -0.5f),  // 4 front-top-left
-        Position(0.5f, 0.5f, -0.5f)    // 5 front-top-right
+    val p0 = Position(-0.5f, -0.5f, -0.5f)
+    val p1 = Position(0.5f, -0.5f, -0.5f)
+    val p2 = Position(0.5f, -0.5f, 0.5f)
+    val p3 = Position(-0.5f, -0.5f, 0.5f)
+    val p4 = Position(-0.5f, 0.5f, -0.5f)
+    val p5 = Position(0.5f, 0.5f, -0.5f)
+    return GeometryMeshBuilder().apply {
+        triangle(p0, p1, p2); triangle(p0, p2, p3)
+        triangle(p0, p4, p5); triangle(p0, p5, p1)
+        triangle(p1, p5, p2)
+        triangle(p0, p3, p4)
+        triangle(p3, p2, p5); triangle(p3, p5, p4)
+    }.build(engine)
+}
+
+@Composable
+private fun SceneScope.CornerWedgeNode(
+    engine: com.google.android.filament.Engine,
+    materialInstance: com.google.android.filament.MaterialInstance,
+    position: Position,
+    rotation: Rotation,
+    scale: Scale,
+    apply: io.github.sceneview.node.MeshNode.() -> Unit
+) {
+    val geometry = remember(engine) { buildCornerWedgeGeometry(engine) }
+    MeshNode(
+        primitiveType = com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES,
+        vertexBuffer = geometry.vertexBuffer,
+        indexBuffer = geometry.indexBuffer,
+        boundingBox = geometry.boundingBox,
+        materialInstance = materialInstance,
+        apply = {
+            this.position = position
+            this.rotation = rotation
+            this.scale = scale
+            apply()
+        }
     )
-    val triangles = listOf(
-        0, 2, 1, 0, 3, 2,       // bottom
-        0, 1, 5, 0, 5, 4,       // front
-        1, 2, 5,                // right
-        3, 0, 4,                // left
-        3, 4, 5, 3, 5, 2        // slanted top (back-bottom -> front-top)
+}
+
+private fun buildCornerWedgeGeometry(engine: com.google.android.filament.Engine): io.github.sceneview.geometries.Geometry {
+    val v0 = Position(0.5f, -0.5f, 0.5f)
+    val v1 = Position(0.5f, -0.5f, -0.5f)
+    val v2 = Position(-0.5f, -0.5f, -0.5f)
+    val v3 = Position(-0.5f, -0.5f, 0.5f)
+    val v4 = Position(0.5f, 0.5f, -0.5f)
+    return GeometryMeshBuilder().apply {
+        triangle(v0, v1, v4)
+        triangle(v0, v4, v3)
+        triangle(v2, v3, v4)
+        triangle(v1, v0, v3); triangle(v1, v3, v2)
+        triangle(v1, v2, v4)
+    }.build(engine)
+}
+
+@Composable
+private fun SceneScope.TrussNode(
+    engine: com.google.android.filament.Engine,
+    materialInstance: com.google.android.filament.MaterialInstance,
+    part: Part,
+    position: Position,
+    rotation: Rotation,
+    apply: io.github.sceneview.node.MeshNode.() -> Unit
+) {
+    val geometry = remember(engine, part.size, part.trussStyle) {
+        buildTrussGeometry(engine, part.size, part.trussStyle)
+    }
+    MeshNode(
+        primitiveType = com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES,
+        vertexBuffer = geometry.vertexBuffer,
+        indexBuffer = geometry.indexBuffer,
+        boundingBox = geometry.boundingBox,
+        materialInstance = materialInstance,
+        apply = {
+            this.position = position
+            this.rotation = rotation
+            apply()
+        }
     )
-    return io.github.sceneview.geometries.Geometry.Builder(
-        com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES
-    )
-        .vertices(v.map { io.github.sceneview.geometries.Geometry.Vertex(position = it) })
-        .indices(triangles)
-        .build(engine)
+}
+
+private fun buildTrussGeometry(
+    engine: com.google.android.filament.Engine,
+    size: com.example.models.Vector3,
+    style: Int
+): io.github.sceneview.geometries.Geometry {
+    val builder = GeometryMeshBuilder()
+    val width = size.x.coerceAtLeast(0.2f)
+    val height = size.y.coerceAtLeast(0.2f)
+    val depth = size.z.coerceAtLeast(0.2f)
+    val thickness = minOf(0.28f, minOf(width, depth) * 0.16f).coerceAtLeast(0.06f)
+    val railX = width / 2f - thickness / 2f
+    val railZ = depth / 2f - thickness / 2f
+    val bottom = -height / 2f
+    val top = height / 2f
+
+    listOf(-railX to -railZ, railX to -railZ, railX to railZ, -railX to railZ).forEach { (x, z) ->
+        builder.boxBetween(Position(x, bottom, z), Position(x, top, z), thickness)
+    }
+
+    val cellCount = (height / 2f).toInt().coerceAtLeast(1)
+    val cellHeight = height / cellCount
+    for (i in 0..cellCount) {
+        val y = bottom + cellHeight * i
+        builder.boxBetween(Position(-railX, y, -railZ), Position(railX, y, -railZ), thickness)
+        builder.boxBetween(Position(-railX, y, railZ), Position(railX, y, railZ), thickness)
+        builder.boxBetween(Position(-railX, y, -railZ), Position(-railX, y, railZ), thickness)
+        builder.boxBetween(Position(railX, y, -railZ), Position(railX, y, railZ), thickness)
+    }
+
+    if (style != Part.TRUSS_STYLE_NO_SUPPORTS) {
+        for (i in 0 until cellCount) {
+            val y0 = bottom + cellHeight * i
+            val y1 = y0 + cellHeight
+            val reverse = when (style) {
+                Part.TRUSS_STYLE_BRIDGE_SUPPORTS -> i >= cellCount / 2
+                else -> i % 2 == 1
+            }
+            val leftX = if (reverse) railX else -railX
+            val rightX = -leftX
+            val frontZ = if (reverse) railZ else -railZ
+            val backZ = -frontZ
+            builder.boxBetween(Position(leftX, y0, -railZ), Position(rightX, y1, -railZ), thickness)
+            builder.boxBetween(Position(rightX, y0, railZ), Position(leftX, y1, railZ), thickness)
+            builder.boxBetween(Position(-railX, y0, frontZ), Position(-railX, y1, backZ), thickness)
+            builder.boxBetween(Position(railX, y0, backZ), Position(railX, y1, frontZ), thickness)
+        }
+    }
+    return builder.build(engine)
+}
+
+private class GeometryMeshBuilder {
+    private val vertices = mutableListOf<io.github.sceneview.geometries.Geometry.Vertex>()
+    private val indices = mutableListOf<Int>()
+
+    fun triangle(a: Position, b: Position, c: Position) {
+        val normal = cross(subtract(b, a), subtract(c, a)).normalizedDirection()
+        val start = vertices.size
+        vertices += io.github.sceneview.geometries.Geometry.Vertex(position = a, normal = normal)
+        vertices += io.github.sceneview.geometries.Geometry.Vertex(position = b, normal = normal)
+        vertices += io.github.sceneview.geometries.Geometry.Vertex(position = c, normal = normal)
+        indices += start; indices += start + 1; indices += start + 2
+    }
+
+    fun boxBetween(start: Position, end: Position, thickness: Float) {
+        val axis = subtract(end, start).normalizedPosition()
+        val reference = if (kotlin.math.abs(axis.y) < 0.9f) Position(0f, 1f, 0f) else Position(1f, 0f, 0f)
+        val side = scalePosition(cross(axis, reference).normalizedPosition(), thickness / 2f)
+        val up = scalePosition(cross(side, axis).normalizedPosition(), thickness / 2f)
+        val s0 = addPosition(addPosition(start, side), up)
+        val s1 = addPosition(subtract(start, side), up)
+        val s2 = subtract(subtract(start, side), up)
+        val s3 = subtract(addPosition(start, side), up)
+        val e0 = addPosition(addPosition(end, side), up)
+        val e1 = addPosition(subtract(end, side), up)
+        val e2 = subtract(subtract(end, side), up)
+        val e3 = subtract(addPosition(end, side), up)
+        quad(s0, s3, s2, s1)
+        quad(e0, e1, e2, e3)
+        quad(s0, e0, e3, s3)
+        quad(s1, s2, e2, e1)
+        quad(s0, s1, e1, e0)
+        quad(s3, e3, e2, s2)
+    }
+
+    private fun quad(a: Position, b: Position, c: Position, d: Position) {
+        triangle(a, b, c)
+        triangle(a, c, d)
+    }
+
+    fun build(engine: com.google.android.filament.Engine): io.github.sceneview.geometries.Geometry =
+        io.github.sceneview.geometries.Geometry.Builder(
+            com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES
+        ).vertices(vertices).indices(indices).build(engine)
+}
+
+private fun addPosition(a: Position, b: Position) = Position(a.x + b.x, a.y + b.y, a.z + b.z)
+private fun scalePosition(value: Position, scale: Float) = Position(value.x * scale, value.y * scale, value.z * scale)
+private fun subtract(a: Position, b: Position) = Position(a.x - b.x, a.y - b.y, a.z - b.z)
+private fun cross(a: Position, b: Position) = Position(
+    a.y * b.z - a.z * b.y,
+    a.z * b.x - a.x * b.z,
+    a.x * b.y - a.y * b.x
+)
+private fun Position.normalizedPosition(): Position {
+    val length = sqrt(x * x + y * y + z * z).coerceAtLeast(0.000001f)
+    return Position(x / length, y / length, z / length)
+}
+private fun Position.normalizedDirection(): Direction {
+    val normalized = normalizedPosition()
+    return Direction(normalized.x, normalized.y, normalized.z)
 }
 
 private enum class GizmoAxis(val x: Float, val y: Float, val z: Float) {
@@ -581,17 +936,18 @@ private fun SceneScope.DecalNode(
         "left" -> Triple(Direction(-1f, 0f, 0f), Size(part.size.z, part.size.y), part.size.x / 2f)
         "right" -> Triple(Direction(1f, 0f, 0f), Size(part.size.z, part.size.y), part.size.x / 2f)
         "back" -> Triple(Direction(0f, 0f, -1f), Size(part.size.x, part.size.y), part.size.z / 2f)
-        else -> Triple(Direction(0f, 0f, 1f), Size(part.size.x, part.size.y), part.size.z / 2f) // Front
+        else -> Triple(Direction(0f, 0f, 1f), Size(part.size.x, part.size.y), part.size.z / 2f)
     }
-    // Push the quad a hair off the face to avoid z-fighting.
-    val epsilon = 0.01f
-    val offset = Position(normal.x * (faceOffset + epsilon), normal.y * (faceOffset + epsilon), normal.z * (faceOffset + epsilon))
-
-    // The textured material (opaque_textured.mat / transparent_textured.mat) only has
-    // a "texture" sampler + metallic/roughness/reflectance — no "color" or
-    // "baseColorFactor" uniform. Tint must be baked into the texture itself (done at
-    // load time in RobloxTextureLoader); do NOT call setParameter("color"/...) here,
-    // it crashes with "uniform named ... not found".
+    val epsilon = maxOf(0.01f, maxOf(part.size.x, part.size.y, part.size.z) * 0.001f) +
+        decal.zIndex.coerceIn(0, 100) * 0.001f
+    val worldOffset = rotateDirection(
+        com.example.models.Vector3(
+            normal.x * (faceOffset + epsilon),
+            normal.y * (faceOffset + epsilon),
+            normal.z * (faceOffset + epsilon)
+        ),
+        part.currentRotation
+    )
     val material = remember(texture) {
         materialLoader.createTextureInstance(texture, isOpaque = decal.transparency <= 0f)
     }
@@ -605,16 +961,18 @@ private fun SceneScope.DecalNode(
         ),
         materialInstance = material,
         position = Position(
-            part.position.x + offset.x,
-            part.position.y + offset.y,
-            part.position.z + offset.z
+            part.currentPosition.x + worldOffset.x,
+            part.currentPosition.y + worldOffset.y,
+            part.currentPosition.z + worldOffset.z
         ),
-        rotation = Rotation(part.rotation.x, part.rotation.y, part.rotation.z),
-        apply = { name = "decal:${decal.id}" }
+        rotation = Rotation(part.currentRotation.x, part.currentRotation.y, part.currentRotation.z),
+        apply = {
+            name = "decal:${decal.id}"
+            setPriority((4 + decal.zIndex.coerceIn(0, 3)).coerceAtMost(7))
+        }
     )
 }
 
-/** Selection highlight: 12 cyan edge lines around the part's bounding box. */
 @Composable
 private fun SceneScope.SelectionNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
@@ -625,21 +983,19 @@ private fun SceneScope.SelectionNode(
             dev.romainguy.kotlin.math.Float4(0.0f, 0.7f, 1.0f, 1.0f)
         )
     }
-    // A slightly oversized unit box's 12 edges, centered on the part.
     val h = 0.53f
     val corners = listOf(
-        Position(-h, -h, -h), Position(h, -h, -h), Position(h, -h, h), Position(-h, -h, h), // bottom
-        Position(-h, h, -h), Position(h, h, -h), Position(h, h, h), Position(-h, h, h)      // top
+        Position(-h, -h, -h), Position(h, -h, -h), Position(h, -h, h), Position(-h, -h, h),
+        Position(-h, h, -h), Position(h, h, -h), Position(h, h, h), Position(-h, h, h)
     )
     val edges = listOf(
-        0 to 1, 1 to 2, 2 to 3, 3 to 0,   // bottom loop
-        4 to 5, 5 to 6, 6 to 7, 7 to 4,   // top loop
-        0 to 4, 1 to 5, 2 to 6, 3 to 7    // verticals
+        0 to 1, 1 to 2, 2 to 3, 3 to 0,
+        4 to 5, 5 to 6, 6 to 7, 7 to 4,
+        0 to 4, 1 to 5, 2 to 6, 3 to 7
     )
-    val center = Position(part.position.x, part.position.y, part.position.z)
-    val rot = Rotation(part.rotation.x, part.rotation.y, part.rotation.z)
+    val center = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z)
+    val rot = Rotation(part.currentRotation.x, part.currentRotation.y, part.currentRotation.z)
     val scl = Scale(part.size.x, part.size.y, part.size.z)
-
     edges.forEach { (a, b) ->
         LineNode(
             start = corners[a],
@@ -661,6 +1017,34 @@ private fun parseHex(hex: String): Int {
     val rgb = hex.removePrefix("#").padEnd(6, '0').take(6)
     return runCatching { rgb.toInt(16) }.getOrDefault(0xCCCCCC)
 }
+
+private fun srgbToLinear(value: Float): Float =
+    if (value <= 0.04045f) value / 12.92f else Math.pow(((value + 0.055f) / 1.055f).toDouble(), 2.4).toFloat()
+
+private data class MaterialAppearance(
+    val metallic: Float,
+    val roughness: Float,
+    val reflectance: Float,
+    val unlit: Boolean = false
+)
+
+private fun materialAppearance(part: Part): MaterialAppearance {
+    val reflectance = part.reflectance.coerceIn(0f, 1f)
+    return when (part.material) {
+        Part.MATERIAL_METAL -> MaterialAppearance(1f, (0.42f - reflectance * 0.3f).coerceAtLeast(0.08f), 0.5f)
+        Part.MATERIAL_GLASS -> MaterialAppearance(0f, 0.08f, maxOf(0.65f, reflectance))
+        Part.MATERIAL_WOOD -> MaterialAppearance(0f, 0.78f, maxOf(0.28f, reflectance))
+        Part.MATERIAL_SLATE -> MaterialAppearance(0f, 0.9f, maxOf(0.22f, reflectance))
+        Part.MATERIAL_BRICK -> MaterialAppearance(0f, 0.86f, maxOf(0.25f, reflectance))
+        Part.MATERIAL_FABRIC -> MaterialAppearance(0f, 1f, maxOf(0.18f, reflectance))
+        Part.MATERIAL_MARBLE -> MaterialAppearance(0f, 0.22f, maxOf(0.55f, reflectance))
+        Part.MATERIAL_NEON -> MaterialAppearance(0f, 0f, 0f, unlit = true)
+        else -> MaterialAppearance(0f, (0.58f - reflectance * 0.35f).coerceAtLeast(0.12f), maxOf(0.35f, reflectance))
+    }
+}
+
+private fun DecalRenderItem.textureCacheKey(): String =
+    listOf(textureUri, isTexture, colorHex.uppercase(), transparency.coerceIn(0f, 1f)).joinToString("|")
 
 private fun orbitCameraPosition(yaw: Float, pitch: Float, distance: Float): Position {
     val yawR = Math.toRadians(yaw.toDouble())

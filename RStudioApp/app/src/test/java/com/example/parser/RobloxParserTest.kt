@@ -269,7 +269,7 @@ class RobloxParserTest {
 
     @Test
     fun serializedPublishRbxlPreservesRequestedClassesAndProperties() {
-        val host = Part("part", "HostPart", size = Vector3(4f, 4f, 4f))
+        val host = Part("part", "HostPart", shape = Part.SHAPE_CORNER_WEDGE, size = Vector3(4f, 4f, 4f))
         val nodes = listOf(
             StudioNode("host-node", "HostPart", StudioNode.CLASS_CORNER_WEDGE_PART, part = host),
             StudioNode(
@@ -319,6 +319,42 @@ class RobloxParserTest {
     }
 
     @Test
+    fun trussFixtureParsesAsTrussWithStyle() {
+        val file = File("/workspaces/Gemini-3-model-card/rbxtest/TrussPart.rbxm")
+        if (!file.exists()) return
+
+        val parts = RobloxParser.instancesToParts(RobloxParser.parseRobloxFile(file.readBytes()))
+        val truss = parts.single()
+
+        assertEquals(Part.SHAPE_TRUSS, truss.shape)
+        assertEquals(Part.TRUSS_STYLE_ALTERNATING_SUPPORTS, truss.trussStyle)
+    }
+
+    @Test
+    fun trussAndCornerWedgeRoundTripPreserveGeometryClass() {
+        val truss = Part(
+            id = "truss",
+            name = "Truss",
+            shape = Part.SHAPE_TRUSS,
+            trussStyle = Part.TRUSS_STYLE_BRIDGE_SUPPORTS,
+            size = Vector3(2f, 12f, 2f)
+        )
+        val corner = Part("corner", "Corner", shape = Part.SHAPE_CORNER_WEDGE)
+
+        val parsed = RobloxParser.parseRobloxFile(
+            RobloxPlaceBinarySerializer.serialize("Special Parts", listOf(truss, corner))
+        )
+        val roundTripParts = RobloxParser.instancesToParts(parsed).associateBy { it.name }
+        val roundTripClasses = parsed.associate { it.name to it.className }
+
+        assertEquals(Part.SHAPE_TRUSS, roundTripParts.getValue("Truss").shape)
+        assertEquals(Part.TRUSS_STYLE_BRIDGE_SUPPORTS, roundTripParts.getValue("Truss").trussStyle)
+        assertEquals(StudioNode.CLASS_TRUSS_PART, roundTripClasses.getValue("Truss"))
+        assertEquals(Part.SHAPE_CORNER_WEDGE, roundTripParts.getValue("Corner").shape)
+        assertEquals(StudioNode.CLASS_CORNER_WEDGE_PART, roundTripClasses.getValue("Corner"))
+    }
+
+    @Test
     fun serializedPublishRbxlPreservesExtendedStudioNodes() {
         val nodes = listOf(
             StudioNode("attachment", "Attachment", StudioNode.CLASS_ATTACHMENT, "part", nodeProperties = mapOf("Visible" to "true")),
@@ -353,5 +389,84 @@ class RobloxParserTest {
         val module = roundTrip.first { it.className == StudioNode.CLASS_MODULE_SCRIPT }
         assertEquals(host.id, attachment.parentId)
         assertEquals("return {}", module.scriptSource)
+    }
+
+    @Test
+    fun serializedPublishRbxlPreservesEffectsAndGuiDecorators() {
+        val part = Part("part", "HostPart")
+        val nodes = listOf(
+            StudioNode("a0", "A0", StudioNode.CLASS_ATTACHMENT, "part"),
+            StudioNode("a1", "A1", StudioNode.CLASS_ATTACHMENT, "part"),
+            StudioNode(
+                "beam", "Beam", StudioNode.CLASS_BEAM, "part",
+                nodeProperties = mapOf(
+                    "Attachment0" to "a0", "Attachment1" to "a1", "Color" to "0:#FF0000:0; 1:#00FF00:0",
+                    "Transparency" to "0:0.1:0; 1:0.8:0", "Width0" to "2", "Width1" to "3"
+                )
+            ),
+            StudioNode(
+                "trail", "Trail", StudioNode.CLASS_TRAIL, "part",
+                nodeProperties = mapOf("Attachment0" to "a0", "Attachment1" to "a1", "Lifetime" to "2.5")
+            ),
+            StudioNode(
+                "particles", "Particles", StudioNode.CLASS_PARTICLE_EMITTER, "part",
+                nodeProperties = mapOf("Rate" to "20", "Lifetime" to "1, 3", "Size" to "0:2:0; 1:0:0")
+            ),
+            StudioNode("surface", "SurfaceGui", StudioNode.CLASS_SURFACE_GUI, "part", nodeProperties = mapOf("CanvasSize" to "x=400, y=200")),
+            StudioNode("frame", "Frame", StudioNode.CLASS_FRAME, "surface"),
+            StudioNode("list", "UIListLayout", StudioNode.CLASS_UI_LIST_LAYOUT, "frame", nodeProperties = mapOf("Padding" to "scale=0.1, offset=4")),
+            StudioNode("corner", "UICorner", StudioNode.CLASS_UI_CORNER, "frame", nodeProperties = mapOf("CornerRadius" to "scale=0, offset=12")),
+            StudioNode("stroke", "UIStroke", StudioNode.CLASS_UI_STROKE, "frame", nodeProperties = mapOf("Color" to "#123456", "Thickness" to "3"))
+        )
+
+        val roundTrip = RobloxParser.instancesToStudioNodes(
+            RobloxParser.parseRobloxFile(RobloxPlaceBinarySerializer.serialize("Effects", listOf(part), nodes))
+        )
+
+        val byClass = roundTrip.associateBy { it.className }
+        assertEquals("2.5", byClass.getValue(StudioNode.CLASS_TRAIL).nodeProperties["Lifetime"])
+        assertEquals("20.0", byClass.getValue(StudioNode.CLASS_PARTICLE_EMITTER).nodeProperties["Rate"])
+        assertEquals("x=400.000, y=200.000", byClass.getValue(StudioNode.CLASS_SURFACE_GUI).nodeProperties["CanvasSize"])
+        assertEquals("scale=0.100, offset=4", byClass.getValue(StudioNode.CLASS_UI_LIST_LAYOUT).nodeProperties["Padding"])
+        assertEquals("scale=0.000, offset=12", byClass.getValue(StudioNode.CLASS_UI_CORNER).nodeProperties["CornerRadius"])
+        assertEquals("#123456", byClass.getValue(StudioNode.CLASS_UI_STROKE).nodeProperties["Color"]?.uppercase())
+        val beam = byClass.getValue(StudioNode.CLASS_BEAM)
+        assertTrue(beam.nodeProperties["Color"].orEmpty().contains("#FF0000", ignoreCase = true))
+        assertEquals("a0", nodes.first { it.id == "beam" }.nodeProperties["Attachment0"])
+        assertTrue(beam.nodeProperties["Attachment0"].orEmpty().isNotBlank())
+    }
+
+    @Test
+    fun xmlParserPreservesGuiAndEffectValueTypes() {
+        val xml = """
+            <roblox version="4">
+              <Item class="Attachment" referent="RBX1"><Properties><string name="Name">A0</string></Properties></Item>
+              <Item class="Beam" referent="RBX2">
+                <Properties>
+                  <string name="Name">Beam</string>
+                  <Ref name="Attachment0">RBX1</Ref>
+                  <NumberSequence name="Transparency">0 0.25 0 1 1 0</NumberSequence>
+                  <ColorSequence name="Color">
+                    <ColorSequenceKeypoint><Time>0</Time><Value><R>1</R><G>0</G><B>0</B></Value><Envelope>0</Envelope></ColorSequenceKeypoint>
+                  </ColorSequence>
+                </Properties>
+              </Item>
+              <Item class="Frame" referent="RBX3">
+                <Properties>
+                  <UDim2 name="Size"><XS>0.5</XS><XO>10</XO><YS>0.25</YS><YO>20</YO></UDim2>
+                </Properties>
+              </Item>
+            </roblox>
+        """.trimIndent()
+
+        val nodes = RobloxParser.instancesToStudioNodes(RobloxParser.parseRobloxXml(xml))
+        val beam = nodes.first { it.className == StudioNode.CLASS_BEAM }
+        val frame = nodes.first { it.className == StudioNode.CLASS_FRAME }
+
+        assertEquals(0x13, beam.propertyTypeIds["Attachment0"])
+        assertEquals("RBX1", beam.nodeProperties["Attachment0"])
+        assertTrue(beam.nodeProperties["Transparency"].orEmpty().contains("0.0:0.25"))
+        assertTrue(beam.nodeProperties["Color"].orEmpty().contains("#ff0000", true))
+        assertEquals("scaleX=0.500, scaleY=0.250, offsetX=10, offsetY=20", frame.nodeProperties["Size"])
     }
 }

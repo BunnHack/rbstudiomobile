@@ -47,6 +47,7 @@ data class Part(
     val parentId: String? = null,
     val script: String = "",
     val effect: String = EFFECT_NONE,
+    val trussStyle: Int = TRUSS_STYLE_ALTERNATING_SUPPORTS,
     // Transient physics states
     val currentPosition: Vector3 = position,
     val currentRotation: Vector3 = rotation,
@@ -57,7 +58,13 @@ data class Part(
         const val SHAPE_SPHERE = "SPHERE"
         const val SHAPE_CYLINDER = "CYLINDER"
         const val SHAPE_WEDGE = "WEDGE"
+        const val SHAPE_CORNER_WEDGE = "CORNER_WEDGE"
+        const val SHAPE_TRUSS = "TRUSS"
         const val SHAPE_SPAWN_LOCATION = "SPAWN_LOCATION"
+
+        const val TRUSS_STYLE_ALTERNATING_SUPPORTS = 0
+        const val TRUSS_STYLE_BRIDGE_SUPPORTS = 1
+        const val TRUSS_STYLE_NO_SUPPORTS = 2
 
         const val MATERIAL_PLASTIC = "Plastic"
         const val MATERIAL_WOOD = "Wood"

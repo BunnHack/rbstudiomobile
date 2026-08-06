@@ -44,4 +44,28 @@ class LightRenderItemTest {
         assertEquals(0.1f, item.range)
         assertEquals(179f, item.angleDegrees)
     }
+
+    @Test
+    fun usesRuntimeTransformForAttachedLight() {
+        val part = Part(
+            "part",
+            "Host",
+            position = Vector3.Zero,
+            currentPosition = Vector3(9f, 8f, 7f),
+            currentRotation = Vector3(0f, 90f, 0f)
+        )
+        val light = StudioNode(
+            "light",
+            "SpotLight",
+            StudioNode.CLASS_SPOT_LIGHT,
+            parentId = "part",
+            nodeProperties = mapOf("Face" to "Front")
+        )
+
+        val item = buildRenderableLights(listOf(light), listOf(part)).single()
+
+        assertEquals(Vector3(10f, 8f, 7f), item.position)
+        assertEquals(1f, item.direction.x, 0.0001f)
+        assertEquals(0f, item.direction.z, 0.0001f)
+    }
 }

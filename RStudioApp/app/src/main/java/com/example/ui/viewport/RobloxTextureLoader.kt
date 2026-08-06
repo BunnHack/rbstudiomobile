@@ -1,7 +1,12 @@
 package com.example.ui.viewport
 
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
 import com.google.android.filament.Engine
+import com.google.android.filament.Skybox
 import com.google.android.filament.Texture
 import io.github.sceneview.texture.ImageTexture
 import kotlinx.coroutines.Dispatchers
@@ -9,6 +14,7 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.IOException
+import java.nio.ByteBuffer
 
 /**
  * Loads Roblox decal/texture images (rbxassetid://, rbxasset://, http) into Filament
@@ -18,7 +24,8 @@ import java.io.IOException
  */
 class RobloxTextureLoader(
     private val engine: Engine,
-    private val httpClient: OkHttpClient
+    private val httpClient: OkHttpClient,
+    private val assetManager: android.content.res.AssetManager
 ) {
     private val cache = mutableMapOf<String, Texture>()
     private val missing = mutableSetOf<String>()
@@ -42,6 +49,66 @@ class RobloxTextureLoader(
             .onSuccess { cache[key] = it }
             .onFailure { missing += key }
             .getOrNull()
+    }
+
+    suspend fun loadSkybox(textureUris: List<String>): Skybox? {
+        if (textureUris.size != 6) return null
+        return runCatching {
+            val bitmaps = withContext(Dispatchers.IO) {
+                textureUris.map { uri ->
+                    val path = resolveRobloxTextureAssetPath(uri)
+                        ?: throw IOException("Unsupported skybox texture: $uri")
+                    val bytes = if (path.startsWith("http://", true) || path.startsWith("https://", true)) {
+                        if (isRobloxAssetDeliveryPath(path)) {
+                            val assetId = path.substringAfter("id=", "").takeWhile(Char::isDigit)
+                            resolveRobloxImageBytes(downloadRobloxAssetBytes(assetId), linkedSetOf(assetId))
+                        } else {
+                            downloadBytes(path)
+                        }
+                    } else {
+                        contextAssetBytes(path)
+                    }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        ?: throw IOException("Could not decode skybox face $uri")
+                }
+            }
+            val size = bitmaps.minOf { minOf(it.width, it.height) }.coerceIn(1, 2048)
+            val faceSize = size * size * 4
+            val buffer = ByteBuffer.allocateDirect(faceSize * 6)
+            bitmaps.forEach { bitmap ->
+                val square = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+                Canvas(square).drawBitmap(
+                    bitmap,
+                    Rect(0, 0, bitmap.width, bitmap.height),
+                    RectF(0f, 0f, size.toFloat(), size.toFloat()),
+                    Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+                )
+                val pixels = IntArray(size * size)
+                square.getPixels(pixels, 0, size, 0, 0, size, size)
+                pixels.forEach { pixel ->
+                    buffer.put(((pixel ushr 16) and 0xFF).toByte())
+                    buffer.put(((pixel ushr 8) and 0xFF).toByte())
+                    buffer.put((pixel and 0xFF).toByte())
+                    buffer.put(((pixel ushr 24) and 0xFF).toByte())
+                }
+                square.recycle()
+            }
+            buffer.flip()
+            val cubemap = Texture.Builder()
+                .width(size)
+                .height(size)
+                .levels(1)
+                .sampler(Texture.Sampler.SAMPLER_CUBEMAP)
+                .format(Texture.InternalFormat.SRGB8_A8)
+                .build(engine)
+            cubemap.setImage(
+                engine,
+                0,
+                Texture.PixelBufferDescriptor(buffer, Texture.Format.RGBA, Texture.Type.UBYTE),
+                IntArray(6) { it * faceSize }
+            )
+            Skybox.Builder().environment(cubemap).build(engine)
+        }.getOrNull()
     }
 
     data class TintColor(val r: Float, val g: Float, val b: Float) {
@@ -91,9 +158,9 @@ class RobloxTextureLoader(
         for (i in px.indices) {
             val p = px[i]
             val a = (((p ushr 24) and 0xFF) / 255f * alpha * 255f).toInt().coerceIn(0, 255)
-            val r = (((p ushr 16) and 0xFF) * tr).toInt().coerceIn(0, 255)
-            val g = (((p ushr 8) and 0xFF) * tg).toInt().coerceIn(0, 255)
-            val b = ((p and 0xFF) * tb).toInt().coerceIn(0, 255)
+            val r = (((p ushr 16) and 0xFF) * tr * a / 255f).toInt().coerceIn(0, 255)
+            val g = (((p ushr 8) and 0xFF) * tg * a / 255f).toInt().coerceIn(0, 255)
+            val b = ((p and 0xFF) * tb * a / 255f).toInt().coerceIn(0, 255)
             px[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
         out.setPixels(px, 0, w, 0, 0, w, h)
@@ -142,6 +209,9 @@ class RobloxTextureLoader(
             return response.body?.bytes() ?: throw IOException("Empty body for $url")
         }
     }
+
+    private fun contextAssetBytes(path: String): ByteArray =
+        assetManager.open(path).use { it.readBytes() }
 
     private fun extractNestedTextureUri(text: String): String? {
         val patterns = listOf(

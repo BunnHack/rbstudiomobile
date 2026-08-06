@@ -22,7 +22,8 @@ data class StudioNode(
     val scriptSource: String = "",
     val isService: Boolean = false,
     val iconHint: String = "",
-    val nodeProperties: Map<String, String> = emptyMap()
+    val nodeProperties: Map<String, String> = emptyMap(),
+    val propertyTypeIds: Map<String, Int> = emptyMap()
 ) {
     val isRenderable: Boolean get() = part != null
     val isFolder: Boolean get() = className == "Folder"
@@ -67,6 +68,14 @@ data class StudioNode(
         const val CLASS_SURFACE_LIGHT = "SurfaceLight"
         const val CLASS_SKY = "Sky"
         const val CLASS_CLICK_DETECTOR = "ClickDetector"
+        const val CLASS_TRAIL = "Trail"
+        const val CLASS_BEAM = "Beam"
+        const val CLASS_PARTICLE_EMITTER = "ParticleEmitter"
+        const val CLASS_SURFACE_GUI = "SurfaceGui"
+        const val CLASS_UI_GRID_LAYOUT = "UIGridLayout"
+        const val CLASS_UI_LIST_LAYOUT = "UIListLayout"
+        const val CLASS_UI_CORNER = "UICorner"
+        const val CLASS_UI_STROKE = "UIStroke"
 
         // Service class names
         const val CLASS_WORKSPACE = "Workspace"
@@ -101,8 +110,25 @@ data class StudioNode(
 
         val GUI_CONTAINER_CLASS_NAMES: Set<String> = setOf(
             CLASS_SCREEN_GUI,
+            CLASS_SURFACE_GUI,
             CLASS_FRAME,
             CLASS_SCROLLING_FRAME
+        )
+
+        val GUI_LAYOUT_CLASS_NAMES: Set<String> = setOf(
+            CLASS_UI_GRID_LAYOUT,
+            CLASS_UI_LIST_LAYOUT
+        )
+
+        val GUI_DECORATOR_CLASS_NAMES: Set<String> = setOf(
+            CLASS_UI_CORNER,
+            CLASS_UI_STROKE
+        )
+
+        val EFFECT_CLASS_NAMES: Set<String> = setOf(
+            CLASS_TRAIL,
+            CLASS_BEAM,
+            CLASS_PARTICLE_EMITTER
         )
 
         val SERVICE_CLASS_NAMES: Set<String> = setOf(

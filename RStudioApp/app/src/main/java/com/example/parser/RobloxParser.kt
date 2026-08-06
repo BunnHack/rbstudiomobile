@@ -27,8 +27,14 @@ object RobloxParser {
         val className: String,
         val parentId: String?,
         val rawProperties: Map<String, Any?>,
-        val properties: MappedProps
+        val properties: MappedProps,
+        val propertyTypeIds: Map<String, Int> = emptyMap()
     )
+
+    data class NumberSequenceKeypoint(val time: Float, val value: Float, val envelope: Float)
+    data class ColorSequenceKeypoint(val time: Float, val color: String, val envelope: Float)
+    data class NumberRangeValue(val min: Float, val max: Float)
+    data class RectValue(val minX: Float, val minY: Float, val maxX: Float, val maxY: Float)
 
     data class MappedProps(
         val name: String? = null,
@@ -331,6 +337,28 @@ object RobloxParser {
             0x10 -> { val v = decodeCFrameArray(reader, count); Array(count) { v[it] as Any? } }
             0x12 -> { val v = decodeUint32Array(reader, count); Array(count) { v[it] as Any? } }
             0x13 -> { val v = decodeReferentArray(reader, count); Array(count) { v[it] as Any? } }
+            0x15 -> Array(count) {
+                val keypointCount = reader.i32.coerceIn(0, 10_000)
+                List(keypointCount) {
+                    NumberSequenceKeypoint(reader.f32, reader.f32, reader.f32)
+                } as Any?
+            }
+            0x16 -> Array(count) {
+                val keypointCount = reader.i32.coerceIn(0, 10_000)
+                List(keypointCount) {
+                    val time = reader.f32
+                    val color = RGB(reader.f32, reader.f32, reader.f32)
+                    ColorSequenceKeypoint(time, parseColorToHex(color) ?: "#ffffff", reader.f32)
+                } as Any?
+            }
+            0x17 -> Array(count) { NumberRangeValue(reader.f32, reader.f32) as Any? }
+            0x18 -> {
+                val minXs = decodeFloat32Array(reader, count)
+                val minYs = decodeFloat32Array(reader, count)
+                val maxXs = decodeFloat32Array(reader, count)
+                val maxYs = decodeFloat32Array(reader, count)
+                Array(count) { RectValue(minXs[it], minYs[it], maxXs[it], maxYs[it]) as Any? }
+            }
             0x19 -> {
                 Array(count) {
                     val flags = reader.u8
@@ -354,12 +382,7 @@ object RobloxParser {
                     mapOf("family" to family, "weight" to weight, "style" to style, "cachedFaceId" to cachedFaceId.ifEmpty { null }) as Any?
                 }
             }
-            0x21 -> {
-                Array(count) {
-                    val totalSize = reader.i32
-                    if (totalSize <= 0 || totalSize > reader.remaining) mapOf<String,Any?>() as Any? else mapOf("_raw" to reader.bytes(totalSize).toList()) as Any?
-                }
-            }
+            0x21 -> { val v = decodeInt64Array(reader, count); Array(count) { v[it] as Any? } }
             0x29 -> {
                 Array(count) {
                     val totalSize = reader.i32
@@ -377,7 +400,13 @@ object RobloxParser {
 
     private data class ClassDef(val typeId: Int, val className: String, val category: Int, val instanceIds: IntArray)
     private data class PropDef(val typeId: Int, val propertyName: String, val dataType: Int, val values: Array<Any?>)
-    private data class TempInst(val referentId: Int, val className: String, val properties: MutableMap<String, Any?>, var parentId: Int? = null)
+    private data class TempInst(
+        val referentId: Int,
+        val className: String,
+        val properties: MutableMap<String, Any?>,
+        val propertyTypeIds: MutableMap<String, Int>,
+        var parentId: Int? = null
+    )
 
     private fun isZstd(data: ByteArray): Boolean =
         data.size >= 4 && data[0] == 0x28.toByte() && data[1] == 0xB5.toByte() && data[2] == 0x2F.toByte() && data[3] == 0xFD.toByte()
@@ -470,7 +499,7 @@ object RobloxParser {
 
         classes.values.forEach { classDef ->
             classDef.instanceIds.forEach { id ->
-                tempInstances[id] = TempInst(id, classDef.className, mutableMapOf())
+                tempInstances[id] = TempInst(id, classDef.className, mutableMapOf(), mutableMapOf())
             }
         }
 
@@ -480,6 +509,7 @@ object RobloxParser {
                 val inst = tempInstances[id]
                 if (inst != null && index < prop.values.size) {
                     inst.properties[prop.propertyName] = prop.values[index]
+                    inst.propertyTypeIds[prop.propertyName] = prop.dataType
                 }
             }
         }
@@ -705,7 +735,8 @@ object RobloxParser {
                 rotation = rotation,
                 velocity = velocity,
                 rotVelocity = rotVelocity
-            )
+            ),
+            propertyTypeIds = temp.propertyTypeIds.toMap()
         )
     }
 
@@ -736,6 +767,7 @@ object RobloxParser {
         val referent = el.getAttribute("referent") ?: java.util.UUID.randomUUID().toString()
 
         val properties = mutableMapOf<String, Any?>()
+        val propertyTypeIds = mutableMapOf<String, Int>()
         val children = el.childNodes
         var propElement: org.w3c.dom.Element? = null
         for (i in 0 until children.length) {
@@ -752,6 +784,7 @@ object RobloxParser {
                 val propNode = childProps.item(i) as? org.w3c.dom.Element ?: continue
                 val name = propNode.getAttribute("name") ?: continue
                 val tagName = propNode.tagName.lowercase()
+                xmlPropertyTypeId(tagName)?.let { propertyTypeIds[name] = it }
                 when (tagName) {
                     "string", "protectedstring" -> properties[name] = propNode.textContent ?: ""
                     "bool" -> properties[name] = propNode.textContent?.trim()?.lowercase() == "true"
@@ -765,6 +798,17 @@ object RobloxParser {
                     }
                     "uniqueid" -> properties[name] = propNode.textContent?.trim().orEmpty()
                     "physicalproperties" -> properties[name] = parseXmlPhysicalProperties(propNode)
+                    "ref" -> properties[name] = propNode.textContent?.trim().orEmpty()
+                    "udim" -> properties[name] = mapOf(
+                        "scale" to (getChildText(propNode, "S") ?: getChildText(propNode, "Scale") ?: 0f),
+                        "offset" to (getChildText(propNode, "O") ?: getChildText(propNode, "Offset") ?: 0f).toInt()
+                    )
+                    "udim2" -> properties[name] = mapOf(
+                        "scaleX" to (getChildText(propNode, "XS") ?: getChildText(propNode, "XScale") ?: 0f),
+                        "scaleY" to (getChildText(propNode, "YS") ?: getChildText(propNode, "YScale") ?: 0f),
+                        "offsetX" to (getChildText(propNode, "XO") ?: getChildText(propNode, "XOffset") ?: 0f).toInt(),
+                        "offsetY" to (getChildText(propNode, "YO") ?: getChildText(propNode, "YOffset") ?: 0f).toInt()
+                    )
                     "vector3" -> {
                         properties[name] = Vec3(
                             getChildText(propNode, "X") ?: 0f,
@@ -797,6 +841,23 @@ object RobloxParser {
                             }
                             properties[name] = RGB(r, g, b)
                         }
+                    }
+                    "numbersequence" -> properties[name] = parseXmlNumberSequence(propNode)
+                    "colorsequence" -> properties[name] = parseXmlColorSequence(propNode)
+                    "numberrange" -> {
+                        val min = getChildText(propNode, "Min")
+                        val max = getChildText(propNode, "Max")
+                        val numbers = xmlNumbers(propNode.textContent.orEmpty())
+                        properties[name] = NumberRangeValue(min ?: numbers.getOrElse(0) { 0f }, max ?: numbers.getOrElse(1) { min ?: 0f })
+                    }
+                    "rect" -> {
+                        val numbers = xmlNumbers(propNode.textContent.orEmpty())
+                        properties[name] = RectValue(
+                            getNestedChildText(propNode, "min", "X") ?: numbers.getOrElse(0) { 0f },
+                            getNestedChildText(propNode, "min", "Y") ?: numbers.getOrElse(1) { 0f },
+                            getNestedChildText(propNode, "max", "X") ?: numbers.getOrElse(2) { 0f },
+                            getNestedChildText(propNode, "max", "Y") ?: numbers.getOrElse(3) { 0f }
+                        )
                     }
                     "token" -> properties[name] = propNode.textContent?.trim()?.toIntOrNull() ?: 0
                 }
@@ -845,7 +906,8 @@ object RobloxParser {
                 rotation = rotation,
                 velocity = velocity,
                 rotVelocity = rotVelocity
-            )
+            ),
+            propertyTypeIds = propertyTypeIds.toMap()
         )
 
         val results = mutableListOf(inst)
@@ -889,6 +951,78 @@ object RobloxParser {
         )
     }
 
+    private fun parseXmlNumberSequence(propNode: org.w3c.dom.Element): List<NumberSequenceKeypoint> {
+        val keypoints = childElements(propNode).filter { it.tagName.equals("NumberSequenceKeypoint", true) }
+        if (keypoints.isNotEmpty()) {
+            return keypoints.map { keypoint ->
+                val numbers = xmlNumbers(keypoint.textContent.orEmpty())
+                NumberSequenceKeypoint(
+                    getChildText(keypoint, "Time") ?: numbers.getOrElse(0) { 0f },
+                    getChildText(keypoint, "Value") ?: numbers.getOrElse(1) { 0f },
+                    getChildText(keypoint, "Envelope") ?: numbers.getOrElse(2) { 0f }
+                )
+            }
+        }
+        val numbers = xmlNumbers(propNode.textContent.orEmpty())
+        return numbers.chunked(3).mapNotNull { values ->
+            if (values.size < 2) null else NumberSequenceKeypoint(values[0], values[1], values.getOrElse(2) { 0f })
+        }
+    }
+
+    private fun parseXmlColorSequence(propNode: org.w3c.dom.Element): List<ColorSequenceKeypoint> {
+        val keypoints = childElements(propNode).filter { it.tagName.equals("ColorSequenceKeypoint", true) }
+        if (keypoints.isNotEmpty()) {
+            return keypoints.map { keypoint ->
+                val value = childElements(keypoint).firstOrNull { it.tagName.equals("Value", true) }
+                val color = value?.let {
+                    RGB(getChildText(it, "R") ?: 1f, getChildText(it, "G") ?: 1f, getChildText(it, "B") ?: 1f)
+                }
+                val numbers = xmlNumbers(keypoint.textContent.orEmpty())
+                ColorSequenceKeypoint(
+                    getChildText(keypoint, "Time") ?: numbers.getOrElse(0) { 0f },
+                    parseColorToHex(color) ?: "#FFFFFF",
+                    getChildText(keypoint, "Envelope") ?: numbers.lastOrNull() ?: 0f
+                )
+            }
+        }
+        return emptyList()
+    }
+
+    private fun childElements(parent: org.w3c.dom.Element): List<org.w3c.dom.Element> = buildList {
+        val children = parent.childNodes
+        for (i in 0 until children.length) (children.item(i) as? org.w3c.dom.Element)?.let(::add)
+    }
+
+    private fun getNestedChildText(parent: org.w3c.dom.Element, child: String, grandchild: String): Float? =
+        childElements(parent).firstOrNull { it.tagName.equals(child, true) }?.let { getChildText(it, grandchild) }
+
+    private fun xmlNumbers(value: String): List<Float> =
+        Regex("-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?").findAll(value).mapNotNull { it.value.toFloatOrNull() }.toList()
+
+    private fun xmlPropertyTypeId(tagName: String): Int? = when (tagName) {
+        "string", "protectedstring", "binarystring" -> 0x01
+        "bool" -> 0x02
+        "int" -> 0x03
+        "float" -> 0x04
+        "double" -> 0x05
+        "udim" -> 0x06
+        "udim2" -> 0x07
+        "color3", "color3uint8" -> 0x0C
+        "vector2" -> 0x0D
+        "vector3" -> 0x0E
+        "coordinateframe", "cframe" -> 0x10
+        "token" -> 0x12
+        "ref" -> 0x13
+        "numbersequence" -> 0x15
+        "colorsequence" -> 0x16
+        "numberrange" -> 0x17
+        "rect" -> 0x18
+        "physicalproperties" -> 0x19
+        "int64" -> 0x1B
+        "uniqueid" -> 0x1F
+        else -> null
+    }
+
     private fun getChildText(parent: org.w3c.dom.Element, tag: String): Float? {
         val children = parent.childNodes
         for (i in 0 until children.length) {
@@ -930,8 +1064,10 @@ object RobloxParser {
                     "Cylinder" -> Part.SHAPE_CYLINDER
                     else -> Part.SHAPE_BLOCK // "Block" or null → default
                 }
-                "MeshPart", "TrussPart", "UnionOperation", "NegateOperation" -> Part.SHAPE_BLOCK
-                "WedgePart", "CornerWedgePart" -> Part.SHAPE_WEDGE
+                "MeshPart", "UnionOperation", "NegateOperation" -> Part.SHAPE_BLOCK
+                "TrussPart" -> Part.SHAPE_TRUSS
+                "WedgePart" -> Part.SHAPE_WEDGE
+                "CornerWedgePart" -> Part.SHAPE_CORNER_WEDGE
                 "BallPart" -> Part.SHAPE_SPHERE
                 "SpawnLocation" -> Part.SHAPE_SPAWN_LOCATION
                 else -> null
@@ -968,6 +1104,12 @@ object RobloxParser {
                 id = inst.id,  // preserve original Roblox instance id so parentId matches
                 name = inst.name,
                 shape = shape,
+                trussStyle = if (cls == StudioNode.CLASS_TRUSS_PART) {
+                    (pickProp(inst.rawProperties, "style", "Style") as? Number)?.toInt()?.coerceIn(0, 2)
+                        ?: Part.TRUSS_STYLE_ALTERNATING_SUPPORTS
+                } else {
+                    Part.TRUSS_STYLE_ALTERNATING_SUPPORTS
+                },
                 position = pos,
                 size = size,
                 rotation = rot,
@@ -1024,10 +1166,9 @@ object RobloxParser {
             val className = if (part != null) {
                 when (part.shape) {
                     Part.SHAPE_SPAWN_LOCATION -> StudioNode.CLASS_SPAWN_LOCATION
-                    Part.SHAPE_WEDGE -> when (inst.className) {
-                        StudioNode.CLASS_CORNER_WEDGE_PART -> StudioNode.CLASS_CORNER_WEDGE_PART
-                        else -> StudioNode.CLASS_WEDGE_PART
-                    }
+                    Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
+                    Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
+                    Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
                     Part.SHAPE_SPHERE -> when (inst.className) {
                         StudioNode.CLASS_BALL_PART -> StudioNode.CLASS_BALL_PART
                         else -> inst.className
@@ -1046,7 +1187,8 @@ object RobloxParser {
                 part = part,
                 scriptSource = inst.properties.source.orEmpty(),
                 isService = inst.className in StudioNode.SERVICE_CLASS_NAMES,
-                nodeProperties = formatNodeProperties(inst)
+                nodeProperties = formatNodeProperties(inst),
+                propertyTypeIds = inst.propertyTypeIds
             )
         }
     }
@@ -1104,9 +1246,19 @@ object RobloxParser {
                 }
             }
             is List<*> -> {
-                if (value.all { it is String }) value.joinToString(", ")
+                if (value.all { it is NumberSequenceKeypoint }) {
+                    value.filterIsInstance<NumberSequenceKeypoint>().joinToString("; ") {
+                        "${it.time}:${it.value}:${it.envelope}"
+                    }
+                } else if (value.all { it is ColorSequenceKeypoint }) {
+                    value.filterIsInstance<ColorSequenceKeypoint>().joinToString("; ") {
+                        "${it.time}:${it.color}:${it.envelope}"
+                    }
+                } else if (value.all { it is String }) value.joinToString(", ")
                 else "${value.size} items"
             }
+            is NumberRangeValue -> "${value.min}, ${value.max}"
+            is RectValue -> "minX=${value.minX}, minY=${value.minY}, maxX=${value.maxX}, maxY=${value.maxY}"
             else -> value.toString()
         }
     }

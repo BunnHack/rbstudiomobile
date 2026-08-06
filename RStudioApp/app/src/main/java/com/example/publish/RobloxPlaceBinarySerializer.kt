@@ -118,7 +118,7 @@ object RobloxPlaceBinarySerializer {
                 instance.props["Shape"] = shapeToken(part.shape)
             }
             if (instance.className == StudioNode.CLASS_TRUSS_PART) {
-                instance.props["Style"] = partNode?.nodeProperties?.get("Style")?.toIntOrNull() ?: 0
+                instance.props["Style"] = part.trussStyle
             }
             if (instance.className == "SpawnLocation") {
                 instance.props["AllowTeamChangeOnTouch"] = part.allowTeamChangeOnTouch
@@ -167,7 +167,7 @@ object RobloxPlaceBinarySerializer {
         }
 
         instances.forEach { instance ->
-            listOf("PrimaryPart", "Part0", "Part1", "SelectionImageObject").forEach { name ->
+            listOf("PrimaryPart", "Part0", "Part1", "Attachment0", "Attachment1", "Adornee", "SelectionImageObject").forEach { name ->
                 val targetId = instance.props[name] as? String ?: return@forEach
                 instancesById[targetId]?.let { target -> instance.props[name] = target }
                     ?: instance.props.remove(name)
@@ -285,6 +285,87 @@ object RobloxPlaceBinarySerializer {
                 instance.props["SunAngularSize"] = float("SunAngularSize", 21f)
                 instance.props["SunTextureId"] = prop("SunTextureId")
             }
+            StudioNode.CLASS_TRAIL -> {
+                instance.props["Attachment0"] = prop("Attachment0")
+                instance.props["Attachment1"] = prop("Attachment1")
+                instance.props["Brightness"] = float("Brightness", 1f)
+                instance.props["Color"] = parseColorSequence(prop("Color", "0:#FFFFFF:0; 1:#FFFFFF:0"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["FaceCamera"] = bool("FaceCamera", false)
+                instance.props["Lifetime"] = float("Lifetime", 0.5f)
+                instance.props["MinLength"] = float("MinLength", 0.1f)
+                instance.props["Texture"] = prop("Texture")
+                instance.props["TextureLength"] = float("TextureLength", 1f)
+                instance.props["TextureMode"] = int("TextureMode", 0)
+                instance.props["Transparency"] = parseNumberSequence(prop("Transparency", "0:0:0; 1:1:0"))
+                instance.props["WidthScale"] = parseNumberSequence(prop("WidthScale", "0:1:0; 1:1:0"))
+            }
+            StudioNode.CLASS_BEAM -> {
+                instance.props["Attachment0"] = prop("Attachment0")
+                instance.props["Attachment1"] = prop("Attachment1")
+                instance.props["Brightness"] = float("Brightness", 1f)
+                instance.props["Color"] = parseColorSequence(prop("Color", "0:#FFFFFF:0; 1:#FFFFFF:0"))
+                instance.props["CurveSize0"] = float("CurveSize0", 0f)
+                instance.props["CurveSize1"] = float("CurveSize1", 0f)
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["FaceCamera"] = bool("FaceCamera", true)
+                instance.props["Segments"] = int("Segments", 1)
+                instance.props["Texture"] = prop("Texture")
+                instance.props["TextureLength"] = float("TextureLength", 1f)
+                instance.props["TextureMode"] = int("TextureMode", 0)
+                instance.props["TextureSpeed"] = float("TextureSpeed", 0f)
+                instance.props["Transparency"] = parseNumberSequence(prop("Transparency", "0:0:0; 1:0:0"))
+                instance.props["Width0"] = float("Width0", 1f)
+                instance.props["Width1"] = float("Width1", 1f)
+                instance.props["ZOffset"] = float("ZOffset", 0f)
+            }
+            StudioNode.CLASS_PARTICLE_EMITTER -> {
+                instance.props["Acceleration"] = parseVector3(prop("Acceleration", "0, 0, 0"))
+                instance.props["Brightness"] = float("Brightness", 1f)
+                instance.props["Color"] = parseColorSequence(prop("Color", "0:#FFFFFF:0; 1:#FFFFFF:0"))
+                instance.props["Drag"] = float("Drag", 0f)
+                instance.props["EmissionDirection"] = faceToken(prop("EmissionDirection", "Front"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["Lifetime"] = parseNumberRange(prop("Lifetime", "1, 1"), 1f)
+                instance.props["Rate"] = float("Rate", 5f)
+                instance.props["Size"] = parseNumberSequence(prop("Size", "0:0.5:0; 1:0:0"))
+                instance.props["Speed"] = parseNumberRange(prop("Speed", "1, 1"), 1f)
+                instance.props["SpreadAngle"] = parseVector2(prop("SpreadAngle", "0, 0"))
+                instance.props["Texture"] = prop("Texture")
+                instance.props["Transparency"] = parseNumberSequence(prop("Transparency", "0:0:0; 1:1:0"))
+            }
+            StudioNode.CLASS_SURFACE_GUI -> {
+                instance.props["Active"] = bool("Active", true)
+                instance.props["Adornee"] = prop("Adornee")
+                instance.props["AlwaysOnTop"] = bool("AlwaysOnTop", false)
+                instance.props["Brightness"] = float("Brightness", 1f)
+                instance.props["CanvasSize"] = parseVector2(prop("CanvasSize", "800, 600"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["Face"] = faceToken(prop("Face", "Front"))
+                instance.props["LightInfluence"] = float("LightInfluence", 0f)
+                instance.props["PixelsPerStud"] = float("PixelsPerStud", 50f)
+                instance.props["ResetOnSpawn"] = bool("ResetOnSpawn", true)
+                instance.props["SizingMode"] = int("SizingMode", 0)
+                instance.props["ZIndexBehavior"] = int("ZIndexBehavior", 0)
+                instance.props["ZOffset"] = float("ZOffset", 0f)
+            }
+            StudioNode.CLASS_UI_LIST_LAYOUT -> {
+                instance.props["FillDirection"] = enumToken(prop("FillDirection", "Vertical"), FILL_DIRECTION)
+                instance.props["HorizontalAlignment"] = enumToken(prop("HorizontalAlignment", "Center"), HORIZONTAL_ALIGNMENT)
+                instance.props["Padding"] = parseUDim(prop("Padding", "scale=0, offset=0"))
+                instance.props["SortOrder"] = enumToken(prop("SortOrder", "LayoutOrder"), SORT_ORDER)
+                instance.props["VerticalAlignment"] = enumToken(prop("VerticalAlignment", "Center"), VERTICAL_ALIGNMENT)
+                instance.props["Wraps"] = bool("Wraps", false)
+            }
+            StudioNode.CLASS_UI_CORNER -> instance.props["CornerRadius"] = parseUDim(prop("CornerRadius", "scale=0, offset=8"))
+            StudioNode.CLASS_UI_STROKE -> {
+                instance.props["ApplyStrokeMode"] = enumToken(prop("ApplyStrokeMode", "Border"), APPLY_STROKE_MODE)
+                instance.props["Color"] = colorRgbFromHex(prop("Color", "#000000"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["LineJoinMode"] = enumToken(prop("LineJoinMode", "Round"), LINE_JOIN_MODE)
+                instance.props["Thickness"] = float("Thickness", 1f)
+                instance.props["Transparency"] = float("Transparency", 0f)
+            }
             StudioNode.CLASS_SCREEN_GUI -> {
                 instance.props["Enabled"] = bool("Enabled", true)
                 instance.props["ResetOnSpawn"] = bool("ResetOnSpawn", true)
@@ -370,6 +451,8 @@ object RobloxPlaceBinarySerializer {
 
     private fun classNameFor(part: Part): String = when (part.shape) {
         Part.SHAPE_WEDGE -> "WedgePart"
+        Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
+        Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
         Part.SHAPE_SPAWN_LOCATION -> "SpawnLocation"
         else -> "Part"
     }
@@ -547,6 +630,27 @@ object RobloxPlaceBinarySerializer {
                 writeFloatProp(writer, classId, "MaxActivationDistance", instances.map { it.props["MaxActivationDistance"] as? Float ?: 32f })
             }
             StudioNode.CLASS_SKY -> writeSkyProps(writer, classId, instances)
+            StudioNode.CLASS_TRAIL -> writeTrailProps(writer, classId, instances)
+            StudioNode.CLASS_BEAM -> writeBeamProps(writer, classId, instances)
+            StudioNode.CLASS_PARTICLE_EMITTER -> writeParticleEmitterProps(writer, classId, instances)
+            StudioNode.CLASS_SURFACE_GUI -> writeSurfaceGuiProps(writer, classId, instances)
+            StudioNode.CLASS_UI_LIST_LAYOUT -> {
+                writeEnumProp(writer, classId, "FillDirection", instances.map { it.props["FillDirection"] as? Int ?: 1 })
+                writeEnumProp(writer, classId, "HorizontalAlignment", instances.map { it.props["HorizontalAlignment"] as? Int ?: 1 })
+                writeUDimProp(writer, classId, "Padding", instances.map { it.props["Padding"] as? UDimValue ?: UDimValue() })
+                writeEnumProp(writer, classId, "SortOrder", instances.map { it.props["SortOrder"] as? Int ?: 2 })
+                writeEnumProp(writer, classId, "VerticalAlignment", instances.map { it.props["VerticalAlignment"] as? Int ?: 1 })
+                writeBoolProp(writer, classId, "Wraps", instances.map { it.props["Wraps"] as? Boolean ?: false })
+            }
+            StudioNode.CLASS_UI_CORNER -> writeUDimProp(writer, classId, "CornerRadius", instances.map { it.props["CornerRadius"] as? UDimValue ?: UDimValue(offset = 8) })
+            StudioNode.CLASS_UI_STROKE -> {
+                writeEnumProp(writer, classId, "ApplyStrokeMode", instances.map { it.props["ApplyStrokeMode"] as? Int ?: 0 })
+                writeColor3Prop(writer, classId, "Color", instances.map { it.props["Color"] as? RgbColor ?: colorRgbFromHex("#000000") })
+                writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+                writeEnumProp(writer, classId, "LineJoinMode", instances.map { it.props["LineJoinMode"] as? Int ?: 0 })
+                writeFloatProp(writer, classId, "Thickness", instances.map { it.props["Thickness"] as? Float ?: 1f })
+                writeFloatProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? Float ?: 0f })
+            }
             StudioNode.CLASS_SCREEN_GUI -> writeScreenGuiProps(writer, classId, instances)
             in StudioNode.GUI_CLASS_NAMES -> writeGuiObjectProps(writer, classId, className, instances)
             StudioNode.CLASS_SOUND_SERVICE -> {
@@ -697,6 +801,70 @@ object RobloxPlaceBinarySerializer {
         writeStringProp(writer, classId, "SunTextureId", instances.map { it.props["SunTextureId"] as? String ?: "" })
     }
 
+    private fun writeTrailProps(writer: BinaryWriter, classId: Int, instances: List<InstanceRecord>) {
+        writeRefProp(writer, classId, "Attachment0", instances.map { it.props["Attachment0"] as? InstanceRecord })
+        writeRefProp(writer, classId, "Attachment1", instances.map { it.props["Attachment1"] as? InstanceRecord })
+        writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as? Float ?: 1f })
+        writeColorSequenceProp(writer, classId, "Color", instances.map { it.props["Color"] as? List<ColorSequencePoint> ?: defaultColorSequence() })
+        writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+        writeBoolProp(writer, classId, "FaceCamera", instances.map { it.props["FaceCamera"] as? Boolean ?: false })
+        writeFloatProp(writer, classId, "Lifetime", instances.map { it.props["Lifetime"] as? Float ?: 0.5f })
+        writeFloatProp(writer, classId, "MinLength", instances.map { it.props["MinLength"] as? Float ?: 0.1f })
+        writeStringProp(writer, classId, "Texture", instances.map { it.props["Texture"] as? String ?: "" })
+        writeFloatProp(writer, classId, "TextureLength", instances.map { it.props["TextureLength"] as? Float ?: 1f })
+        writeEnumProp(writer, classId, "TextureMode", instances.map { it.props["TextureMode"] as? Int ?: 0 })
+        writeNumberSequenceProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? List<NumberSequencePoint> ?: defaultNumberSequence(0f, 1f) })
+        writeNumberSequenceProp(writer, classId, "WidthScale", instances.map { it.props["WidthScale"] as? List<NumberSequencePoint> ?: defaultNumberSequence(1f, 1f) })
+    }
+
+    private fun writeBeamProps(writer: BinaryWriter, classId: Int, instances: List<InstanceRecord>) {
+        writeRefProp(writer, classId, "Attachment0", instances.map { it.props["Attachment0"] as? InstanceRecord })
+        writeRefProp(writer, classId, "Attachment1", instances.map { it.props["Attachment1"] as? InstanceRecord })
+        writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as? Float ?: 1f })
+        writeColorSequenceProp(writer, classId, "Color", instances.map { it.props["Color"] as? List<ColorSequencePoint> ?: defaultColorSequence() })
+        listOf("CurveSize0", "CurveSize1", "TextureLength", "TextureSpeed", "Width0", "Width1", "ZOffset").forEach { name ->
+            writeFloatProp(writer, classId, name, instances.map { it.props[name] as? Float ?: if (name.startsWith("Width") || name == "TextureLength") 1f else 0f })
+        }
+        writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+        writeBoolProp(writer, classId, "FaceCamera", instances.map { it.props["FaceCamera"] as? Boolean ?: true })
+        writeIntProp(writer, classId, "Segments", instances.map { it.props["Segments"] as? Int ?: 1 })
+        writeStringProp(writer, classId, "Texture", instances.map { it.props["Texture"] as? String ?: "" })
+        writeEnumProp(writer, classId, "TextureMode", instances.map { it.props["TextureMode"] as? Int ?: 0 })
+        writeNumberSequenceProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? List<NumberSequencePoint> ?: defaultNumberSequence(0f, 0f) })
+    }
+
+    private fun writeParticleEmitterProps(writer: BinaryWriter, classId: Int, instances: List<InstanceRecord>) {
+        writeVector3Prop(writer, classId, "Acceleration", instances.map { it.props["Acceleration"] as? Vector3 ?: Vector3.Zero })
+        writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as? Float ?: 1f })
+        writeColorSequenceProp(writer, classId, "Color", instances.map { it.props["Color"] as? List<ColorSequencePoint> ?: defaultColorSequence() })
+        writeFloatProp(writer, classId, "Drag", instances.map { it.props["Drag"] as? Float ?: 0f })
+        writeEnumProp(writer, classId, "EmissionDirection", instances.map { it.props["EmissionDirection"] as? Int ?: 5 })
+        writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+        writeNumberRangeProp(writer, classId, "Lifetime", instances.map { it.props["Lifetime"] as? NumberRange ?: NumberRange(1f, 1f) })
+        writeFloatProp(writer, classId, "Rate", instances.map { it.props["Rate"] as? Float ?: 5f })
+        writeNumberSequenceProp(writer, classId, "Size", instances.map { it.props["Size"] as? List<NumberSequencePoint> ?: defaultNumberSequence(0.5f, 0f) })
+        writeNumberRangeProp(writer, classId, "Speed", instances.map { it.props["Speed"] as? NumberRange ?: NumberRange(1f, 1f) })
+        writeVector2Prop(writer, classId, "SpreadAngle", instances.map { it.props["SpreadAngle"] as? Vector2Value ?: Vector2Value(0f, 0f) })
+        writeStringProp(writer, classId, "Texture", instances.map { it.props["Texture"] as? String ?: "" })
+        writeNumberSequenceProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? List<NumberSequencePoint> ?: defaultNumberSequence(0f, 1f) })
+    }
+
+    private fun writeSurfaceGuiProps(writer: BinaryWriter, classId: Int, instances: List<InstanceRecord>) {
+        writeBoolProp(writer, classId, "Active", instances.map { it.props["Active"] as? Boolean ?: true })
+        writeRefProp(writer, classId, "Adornee", instances.map { it.props["Adornee"] as? InstanceRecord })
+        writeBoolProp(writer, classId, "AlwaysOnTop", instances.map { it.props["AlwaysOnTop"] as? Boolean ?: false })
+        writeFloatProp(writer, classId, "Brightness", instances.map { it.props["Brightness"] as? Float ?: 1f })
+        writeVector2Prop(writer, classId, "CanvasSize", instances.map { it.props["CanvasSize"] as? Vector2Value ?: Vector2Value(800f, 600f) })
+        writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+        writeEnumProp(writer, classId, "Face", instances.map { it.props["Face"] as? Int ?: 5 })
+        writeFloatProp(writer, classId, "LightInfluence", instances.map { it.props["LightInfluence"] as? Float ?: 0f })
+        writeFloatProp(writer, classId, "PixelsPerStud", instances.map { it.props["PixelsPerStud"] as? Float ?: 50f })
+        writeBoolProp(writer, classId, "ResetOnSpawn", instances.map { it.props["ResetOnSpawn"] as? Boolean ?: true })
+        writeEnumProp(writer, classId, "SizingMode", instances.map { it.props["SizingMode"] as? Int ?: 0 })
+        writeEnumProp(writer, classId, "ZIndexBehavior", instances.map { it.props["ZIndexBehavior"] as? Int ?: 0 })
+        writeFloatProp(writer, classId, "ZOffset", instances.map { it.props["ZOffset"] as? Float ?: 0f })
+    }
+
     private fun writeParentChunk(writer: BinaryWriter, instances: List<InstanceRecord>) {
         val chunk = BinaryWriter()
         chunk.writeUInt8(0) // version
@@ -741,6 +909,46 @@ object RobloxPlaceBinarySerializer {
             chunk.writeInterleavedFloats(values.map { it.scaleY }.toFloatArray())
             chunk.writeInterleavedInts(values.map { it.offsetX }.toIntArray(), zigzag = true)
             chunk.writeInterleavedInts(values.map { it.offsetY }.toIntArray(), zigzag = true)
+        }
+
+    private fun writeUDimProp(writer: BinaryWriter, classId: Int, name: String, values: List<UDimValue>) =
+        writeProp(writer, classId, name, TYPE_UDIM) { chunk ->
+            chunk.writeInterleavedFloats(values.map { it.scale }.toFloatArray())
+            chunk.writeInterleavedInts(values.map { it.offset }.toIntArray(), zigzag = true)
+        }
+
+    private fun writeNumberSequenceProp(writer: BinaryWriter, classId: Int, name: String, values: List<List<NumberSequencePoint>>) =
+        writeProp(writer, classId, name, TYPE_NUMBER_SEQUENCE) { chunk ->
+            values.forEach { sequence ->
+                chunk.writeInt32LE(sequence.size)
+                sequence.forEach { point ->
+                    chunk.writeFloat32LE(point.time)
+                    chunk.writeFloat32LE(point.value)
+                    chunk.writeFloat32LE(point.envelope)
+                }
+            }
+        }
+
+    private fun writeColorSequenceProp(writer: BinaryWriter, classId: Int, name: String, values: List<List<ColorSequencePoint>>) =
+        writeProp(writer, classId, name, TYPE_COLOR_SEQUENCE) { chunk ->
+            values.forEach { sequence ->
+                chunk.writeInt32LE(sequence.size)
+                sequence.forEach { point ->
+                    chunk.writeFloat32LE(point.time)
+                    chunk.writeFloat32LE(point.color.r)
+                    chunk.writeFloat32LE(point.color.g)
+                    chunk.writeFloat32LE(point.color.b)
+                    chunk.writeFloat32LE(point.envelope)
+                }
+            }
+        }
+
+    private fun writeNumberRangeProp(writer: BinaryWriter, classId: Int, name: String, values: List<NumberRange>) =
+        writeProp(writer, classId, name, TYPE_NUMBER_RANGE) { chunk ->
+            values.forEach { range ->
+                chunk.writeFloat32LE(range.min)
+                chunk.writeFloat32LE(range.max)
+            }
         }
 
     private fun writeFontProp(writer: BinaryWriter, classId: Int, name: String, values: List<FontValue>) =
@@ -917,6 +1125,45 @@ object RobloxPlaceBinarySerializer {
         return UDim2Value(float("scaleX"), float("scaleY"), int("offsetX"), int("offsetY"))
     }
 
+    private fun parseUDim(value: String): UDimValue {
+        fun named(name: String): Float? = Regex("$name\\s*=\\s*(-?\\d+(?:\\.\\d+)?)", RegexOption.IGNORE_CASE)
+            .find(value)?.groupValues?.getOrNull(1)?.toFloatOrNull()
+        val numbers = numbersIn(value)
+        return UDimValue(named("scale") ?: numbers.getOrElse(0) { 0f }, (named("offset") ?: numbers.getOrElse(1) { 0f }).toInt())
+    }
+
+    private fun parseVector3(value: String): Vector3 {
+        val numbers = numbersIn(value)
+        return Vector3(numbers.getOrElse(0) { 0f }, numbers.getOrElse(1) { 0f }, numbers.getOrElse(2) { 0f })
+    }
+
+    private fun parseNumberRange(value: String, default: Float): NumberRange {
+        val numbers = numbersIn(value)
+        return NumberRange(numbers.getOrElse(0) { default }, numbers.getOrElse(1) { numbers.getOrElse(0) { default } })
+    }
+
+    private fun parseNumberSequence(value: String): List<NumberSequencePoint> =
+        value.split(';').mapNotNull { entry ->
+            val numbers = numbersIn(entry)
+            if (numbers.size < 2) null else NumberSequencePoint(numbers[0], numbers[1], numbers.getOrElse(2) { 0f })
+        }.ifEmpty { defaultNumberSequence(0f, 0f) }
+
+    private fun parseColorSequence(value: String): List<ColorSequencePoint> =
+        value.split(';').mapNotNull { entry ->
+            val colorHex = Regex("#[0-9a-fA-F]{6}").find(entry)?.value ?: return@mapNotNull null
+            val numbers = numbersIn(entry.replace(colorHex, ""))
+            ColorSequencePoint(numbers.getOrElse(0) { 0f }, colorRgbFromHex(colorHex), numbers.getOrElse(1) { 0f })
+        }.ifEmpty { defaultColorSequence() }
+
+    private fun numbersIn(value: String): List<Float> =
+        Regex("-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?").findAll(value).mapNotNull { it.value.toFloatOrNull() }.toList()
+
+    private fun defaultNumberSequence(first: Float, last: Float) =
+        listOf(NumberSequencePoint(0f, first, 0f), NumberSequencePoint(1f, last, 0f))
+
+    private fun defaultColorSequence() =
+        listOf(ColorSequencePoint(0f, colorRgbFromHex("#FFFFFF"), 0f), ColorSequencePoint(1f, colorRgbFromHex("#FFFFFF"), 0f))
+
     private fun parseFont(value: String): FontValue {
         fun token(name: String): String? = Regex("$name\\s*=\\s*([^,]+)", RegexOption.IGNORE_CASE)
             .find(value)?.groupValues?.getOrNull(1)?.trim()
@@ -999,6 +1246,7 @@ object RobloxPlaceBinarySerializer {
     private data class CFrameValue(val position: Vector3, val rotation: FloatArray)
     private data class RgbColor(val r: Float, val g: Float, val b: Float)
     private data class Vector2Value(val x: Float, val y: Float)
+    private data class UDimValue(val scale: Float = 0f, val offset: Int = 0)
     private data class UDim2Value(
         val scaleX: Float = 0f,
         val scaleY: Float = 0f,
@@ -1006,6 +1254,9 @@ object RobloxPlaceBinarySerializer {
         val offsetY: Int = 0
     )
     private data class FontValue(val family: String, val weight: Int, val style: Int, val cachedFaceId: String)
+    private data class NumberSequencePoint(val time: Float, val value: Float, val envelope: Float)
+    private data class ColorSequencePoint(val time: Float, val color: RgbColor, val envelope: Float)
+    private data class NumberRange(val min: Float, val max: Float)
 
     private class BinaryWriter {
         private val out = ByteArrayOutputStream()
@@ -1160,6 +1411,7 @@ object RobloxPlaceBinarySerializer {
     private const val TYPE_INT32 = 0x03
     private const val TYPE_FLOAT32 = 0x04
     private const val TYPE_DOUBLE = 0x05
+    private const val TYPE_UDIM = 0x06
     private const val TYPE_UDIM2 = 0x07
     private const val TYPE_COLOR3 = 0x0C
     private const val TYPE_VECTOR2 = 0x0D
@@ -1169,6 +1421,9 @@ object RobloxPlaceBinarySerializer {
     private const val TYPE_CFRAME = 0x10
     private const val TYPE_ENUM = 0x12
     private const val TYPE_REF = 0x13
+    private const val TYPE_NUMBER_SEQUENCE = 0x15
+    private const val TYPE_COLOR_SEQUENCE = 0x16
+    private const val TYPE_NUMBER_RANGE = 0x17
     private const val TYPE_INT64 = 0x1B
     private const val TYPE_UNIQUEID = 0x1F
     private const val TYPE_FONT = 0x20
@@ -1177,7 +1432,8 @@ object RobloxPlaceBinarySerializer {
     private val USER_NODE_CLASSES = setOf(
         "Script", "LocalScript", "ModuleScript", "Attachment", "RemoteEvent",
         "Sound", "PointLight", "SpotLight", "SurfaceLight", "Folder", "Model",
-        "Weld", "WeldConstraint", "ClickDetector", "Decal", "Texture", "Sky"
+        "Weld", "WeldConstraint", "ClickDetector", "Decal", "Texture", "Sky",
+        "Trail", "Beam", "ParticleEmitter", "SurfaceGui", "UIListLayout", "UICorner", "UIStroke"
     ) + StudioNode.GUI_CLASS_NAMES
 
     private val BASE_PART_CLASSES = setOf(
@@ -1205,4 +1461,10 @@ object RobloxPlaceBinarySerializer {
     private val TEXT_Y_ALIGNMENT = mapOf("Top" to 0, "Center" to 1, "Bottom" to 2)
     private val SCALE_TYPE = mapOf("Stretch" to 0, "Slice" to 1, "Tile" to 2, "Fit" to 3, "Crop" to 4)
     private val MODEL_LEVEL_OF_DETAIL = mapOf("Automatic" to 0, "StreamingMesh" to 1, "Disabled" to 2)
+    private val FILL_DIRECTION = mapOf("Horizontal" to 0, "Vertical" to 1)
+    private val HORIZONTAL_ALIGNMENT = mapOf("Left" to 0, "Center" to 1, "Right" to 2)
+    private val VERTICAL_ALIGNMENT = mapOf("Top" to 0, "Center" to 1, "Bottom" to 2)
+    private val SORT_ORDER = mapOf("Name" to 0, "Custom" to 1, "LayoutOrder" to 2)
+    private val APPLY_STROKE_MODE = mapOf("Border" to 0, "Contextual" to 1)
+    private val LINE_JOIN_MODE = mapOf("Round" to 0, "Bevel" to 1, "Miter" to 2)
 }

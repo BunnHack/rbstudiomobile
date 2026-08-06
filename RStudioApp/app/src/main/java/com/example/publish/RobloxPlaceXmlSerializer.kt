@@ -54,6 +54,8 @@ object RobloxPlaceXmlSerializer {
     private fun appendPart(sb: StringBuilder, part: Part) {
         val className = when (part.shape) {
             Part.SHAPE_WEDGE -> "WedgePart"
+            Part.SHAPE_CORNER_WEDGE -> "CornerWedgePart"
+            Part.SHAPE_TRUSS -> "TrussPart"
             Part.SHAPE_SPAWN_LOCATION -> "SpawnLocation"
             else -> "Part"
         }
@@ -82,6 +84,7 @@ object RobloxPlaceXmlSerializer {
         boolProp(sb, 4, "Locked", part.locked)
         boolProp(sb, 4, "Massless", part.massless)
         tokenProp(sb, 4, "Material", materialToken(part.material))
+        if (part.shape == Part.SHAPE_TRUSS) tokenProp(sb, 4, "style", part.trussStyle)
         stringProp(sb, 4, "MaterialVariantSerialized", part.materialVariant)
         stringProp(sb, 4, "Name", part.name)
         coordinateFrameProp(sb, 4, "PivotOffset", Vector3.Zero, Vector3.Zero)

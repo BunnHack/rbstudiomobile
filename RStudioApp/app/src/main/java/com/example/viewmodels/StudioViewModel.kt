@@ -146,8 +146,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         historyCommitJob?.cancel()
         historyCommitJob = null
         _activePlace.value = place
-        val loadedParts = repository.parsePartsJson(place.partsJson)
+        val rawParts = repository.parsePartsJson(place.partsJson)
         val loadedNodes = normalizeStoredNodes(repository.parseNodesJson(place.nodesJson))
+        val loadedParts = normalizeSpecialPartShapes(rawParts, loadedNodes)
         _parts.value = loadedParts
         _selectedPart.value = null
         _nodes.value = StudioNodeGraph.syncPartBackedNodes(loadedNodes, loadedParts)
@@ -493,6 +494,26 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         return services + nodes.filterNot { it.className in StudioNode.SERVICE_CLASS_NAMES }
     }
 
+    private fun normalizeSpecialPartShapes(parts: List<Part>, nodes: List<StudioNode>): List<Part> {
+        val classByPartId = nodes.mapNotNull { node -> node.part?.id?.let { it to node.className } }.toMap()
+        val styleByPartId = nodes.mapNotNull { node ->
+            node.part?.id?.let { partId ->
+                partId to (node.nodeProperties.entries.firstOrNull { it.key.equals("style", true) }?.value?.toIntOrNull()
+                    ?: Part.TRUSS_STYLE_ALTERNATING_SUPPORTS)
+            }
+        }.toMap()
+        return parts.map { part ->
+            when (classByPartId[part.id]) {
+                StudioNode.CLASS_CORNER_WEDGE_PART -> part.copy(shape = Part.SHAPE_CORNER_WEDGE)
+                StudioNode.CLASS_TRUSS_PART -> part.copy(
+                    shape = Part.SHAPE_TRUSS,
+                    trussStyle = styleByPartId[part.id]?.coerceIn(0, 2) ?: Part.TRUSS_STYLE_ALTERNATING_SUPPORTS
+                )
+                else -> part
+            }
+        }
+    }
+
     private fun defaultScriptSource(className: String): String =
         when (className) {
             StudioNode.CLASS_LOCAL_SCRIPT -> "-- LocalScript\nprint('Hello from client')\n"
@@ -584,6 +605,55 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "CursorIcon" to "",
                 "MaxActivationDistance" to "32.0"
             )
+            StudioNode.CLASS_TRAIL -> mapOf(
+                "Attachment0" to "",
+                "Attachment1" to "",
+                "Brightness" to "1.0",
+                "Color" to "0:#FF7A00:0; 1:#C23D00:0",
+                "Enabled" to "true",
+                "FaceCamera" to "false",
+                "Lifetime" to "0.5",
+                "MinLength" to "0.1",
+                "Texture" to "",
+                "TextureLength" to "1.0",
+                "TextureMode" to "0",
+                "Transparency" to "0:0.5:0; 1:0.5:0",
+                "WidthScale" to "0:1:0; 1:1:0"
+            )
+            StudioNode.CLASS_BEAM -> mapOf(
+                "Attachment0" to "",
+                "Attachment1" to "",
+                "Brightness" to "1.0",
+                "Color" to "0:#FFD29D:0; 1:#FFD29D:0",
+                "CurveSize0" to "0.0",
+                "CurveSize1" to "0.0",
+                "Enabled" to "true",
+                "FaceCamera" to "true",
+                "Segments" to "1",
+                "Texture" to "",
+                "TextureLength" to "1.0",
+                "TextureMode" to "0",
+                "TextureSpeed" to "0.0",
+                "Transparency" to "0:0.75:0; 1:0.75:0",
+                "Width0" to "1.0",
+                "Width1" to "1.0",
+                "ZOffset" to "0.0"
+            )
+            StudioNode.CLASS_PARTICLE_EMITTER -> mapOf(
+                "Acceleration" to "0.0, 0.0, 0.0",
+                "Brightness" to "1.0",
+                "Color" to "0:#FFFFFF:0; 1:#FFFFFF:0",
+                "Drag" to "0.0",
+                "EmissionDirection" to "Front",
+                "Enabled" to "true",
+                "Lifetime" to "1.0, 1.0",
+                "Rate" to "5.0",
+                "Size" to "0:0.5:0; 1:0.0:0",
+                "Speed" to "1.0, 1.0",
+                "SpreadAngle" to "x=0.0, y=0.0",
+                "Texture" to "",
+                "Transparency" to "0:0:0; 1:1:0"
+            )
             else -> emptyMap()
         }
         return identity
@@ -596,8 +666,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         StudioNode.CLASS_SOUND,
         StudioNode.CLASS_POINT_LIGHT,
         StudioNode.CLASS_SPOT_LIGHT,
-        StudioNode.CLASS_SURFACE_LIGHT -> selected?.id ?: null
+        StudioNode.CLASS_SURFACE_LIGHT,
+        StudioNode.CLASS_TRAIL,
+        StudioNode.CLASS_BEAM,
+        StudioNode.CLASS_PARTICLE_EMITTER -> selected?.id ?: null
         StudioNode.CLASS_SKY -> StudioNode.CLASS_LIGHTING
+        StudioNode.CLASS_SURFACE_GUI -> selected?.id ?: null
         else -> insertionParentId(selected)
     }
 
@@ -618,6 +692,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "IgnoreGuiInset" to "false",
                 "DisplayOrder" to "0",
                 "ZIndexBehavior" to "Sibling"
+            )
+            return identity
+        }
+
+        if (className == StudioNode.CLASS_SURFACE_GUI) {
+            identity += mapOf(
+                "Active" to "true",
+                "AlwaysOnTop" to "false",
+                "Brightness" to "1.0",
+                "CanvasSize" to "x=800.0, y=600.0",
+                "Enabled" to "true",
+                "Face" to "Front",
+                "LightInfluence" to "0.0",
+                "PixelsPerStud" to "50.0",
+                "ResetOnSpawn" to "true",
+                "SizingMode" to "0",
+                "ZIndexBehavior" to "0",
+                "ZOffset" to "0.0"
             )
             return identity
         }
@@ -696,10 +788,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         selected: StudioNode?,
         extraNodes: MutableList<StudioNode>
     ): String? {
-        if (className !in StudioNode.GUI_CLASS_NAMES) return null
-        if (className == StudioNode.CLASS_SCREEN_GUI) return StudioNode.CLASS_STARTER_GUI
-
+        if (className !in StudioNode.GUI_CLASS_NAMES &&
+            className !in StudioNode.GUI_LAYOUT_CLASS_NAMES &&
+            className !in StudioNode.GUI_DECORATOR_CLASS_NAMES
+        ) return null
         val nodes = _nodes.value
+        if (className == StudioNode.CLASS_SCREEN_GUI) return StudioNode.CLASS_STARTER_GUI
+        if (className in StudioNode.GUI_LAYOUT_CLASS_NAMES || className in StudioNode.GUI_DECORATOR_CLASS_NAMES) {
+            return selected?.takeIf { it.isGuiObject || it.isGuiContainer }?.id
+                ?: selected?.parentId?.takeIf { parentId -> nodes.any { it.id == parentId && (it.isGuiObject || it.isGuiContainer) } }
+        }
         if (selected?.isGuiContainer == true) return selected.id
         val selectedParent = selected?.parentId?.let { parentId -> nodes.firstOrNull { it.id == parentId } }
         if (selectedParent?.isGuiContainer == true) return selectedParent.id
@@ -765,8 +863,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 // Part-like: create Part + node
                 val shape = when (className) {
                     StudioNode.CLASS_BALL_PART -> Part.SHAPE_SPHERE
-                    StudioNode.CLASS_WEDGE_PART,
-                    StudioNode.CLASS_CORNER_WEDGE_PART -> Part.SHAPE_WEDGE
+                    StudioNode.CLASS_WEDGE_PART -> Part.SHAPE_WEDGE
+                    StudioNode.CLASS_CORNER_WEDGE_PART -> Part.SHAPE_CORNER_WEDGE
+                    StudioNode.CLASS_TRUSS_PART -> Part.SHAPE_TRUSS
                     StudioNode.CLASS_SPAWN_LOCATION -> Part.SHAPE_SPAWN_LOCATION
                     else -> Part.SHAPE_BLOCK
                 }
@@ -1003,7 +1102,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         // Map shape string to className for insertNode
         val className = when (shape) {
             Part.SHAPE_SPHERE -> StudioNode.CLASS_BALL_PART
-            Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
+                Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
+                Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
+                Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
             Part.SHAPE_SPAWN_LOCATION -> StudioNode.CLASS_SPAWN_LOCATION
             else -> StudioNode.CLASS_PART
         }
@@ -1038,7 +1139,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             StudioNode.CLASS_SCREEN_GUI, StudioNode.CLASS_FRAME, StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON,
             StudioNode.CLASS_TEXT_BOX,
             StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON,
-            StudioNode.CLASS_SKY, StudioNode.CLASS_CLICK_DETECTOR, "ProximityPrompt", "Dialog" -> {
+            StudioNode.CLASS_SKY, StudioNode.CLASS_CLICK_DETECTOR,
+            StudioNode.CLASS_TRAIL, StudioNode.CLASS_BEAM, StudioNode.CLASS_PARTICLE_EMITTER,
+            StudioNode.CLASS_SURFACE_GUI, StudioNode.CLASS_UI_LIST_LAYOUT,
+            StudioNode.CLASS_UI_CORNER, StudioNode.CLASS_UI_STROKE,
+            "ProximityPrompt", "Dialog" -> {
                 // Non-renderable 3D interface — create as node without part
                 val selected = _selectedNode.value
                 val extraNodes = mutableListOf<StudioNode>()
@@ -1085,9 +1190,41 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     StudioNode.CLASS_SOUND,
                     StudioNode.CLASS_POINT_LIGHT,
                     StudioNode.CLASS_SPOT_LIGHT,
-                    StudioNode.CLASS_SURFACE_LIGHT -> defaultObjectProperties(className, parentId)
+                    StudioNode.CLASS_SURFACE_LIGHT,
+                    StudioNode.CLASS_TRAIL,
+                    StudioNode.CLASS_BEAM,
+                    StudioNode.CLASS_PARTICLE_EMITTER -> defaultObjectProperties(className, parentId)
                     StudioNode.CLASS_SKY,
                     StudioNode.CLASS_CLICK_DETECTOR -> defaultObjectProperties(className, parentId)
+                    StudioNode.CLASS_SURFACE_GUI -> defaultGuiProperties(className, parentId)
+                    StudioNode.CLASS_UI_LIST_LAYOUT -> mapOf(
+                        "ClassName" to className,
+                        "Name" to className,
+                        "FillDirection" to "Vertical",
+                        "HorizontalAlignment" to "Center",
+                        "Padding" to "scale=0.0, offset=0",
+                        "SortOrder" to "LayoutOrder",
+                        "VerticalAlignment" to "Center",
+                        "Wraps" to "false",
+                        "ParentId" to (parentId ?: StudioNode.CLASS_STARTER_GUI)
+                    )
+                    StudioNode.CLASS_UI_CORNER -> mapOf(
+                        "ClassName" to className,
+                        "Name" to className,
+                        "CornerRadius" to "scale=0.0, offset=8",
+                        "ParentId" to (parentId ?: StudioNode.CLASS_STARTER_GUI)
+                    )
+                    StudioNode.CLASS_UI_STROKE -> mapOf(
+                        "ClassName" to className,
+                        "Name" to className,
+                        "ApplyStrokeMode" to "Border",
+                        "Color" to "#000000",
+                        "Enabled" to "true",
+                        "LineJoinMode" to "Round",
+                        "Thickness" to "1.0",
+                        "Transparency" to "0.0",
+                        "ParentId" to (parentId ?: StudioNode.CLASS_STARTER_GUI)
+                    )
                     else -> mapOf(
                         "ClassName" to className,
                         "Name" to className,
@@ -1346,11 +1483,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             return node.parentId?.let { idMap[it] ?: fallbackParentId } ?: fallbackParentId
         }
 
-        fun remapProperties(properties: Map<String, String>): Map<String, String> {
+        fun remapProperties(properties: Map<String, String>, propertyTypeIds: Map<String, Int>): Map<String, String> {
             return properties.mapValues { (key, value) ->
                 when {
                     key == "SourceAssetId" && sourceAssetId != null -> sourceAssetId.toString()
-                    key in setOf("ParentId", "PrimaryPart", "Part0", "Part1") -> idMap[value] ?: value
+                    key == "ParentId" || propertyTypeIds[key] == 0x13 || key in setOf(
+                        "PrimaryPart", "Part0", "Part1", "Attachment0", "Attachment1", "Adornee",
+                        "SelectionImageObject", "RootLocalizationTable", "NextSelectionDown",
+                        "NextSelectionLeft", "NextSelectionRight", "NextSelectionUp"
+                    ) -> idMap[value] ?: value
                     else -> value
                 }
             }
@@ -1376,7 +1517,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     parentId = null,
                     part = null,
                     isService = true,
-                    nodeProperties = remapProperties(node.nodeProperties)
+                    nodeProperties = remapProperties(node.nodeProperties, node.propertyTypeIds)
                 )
             }
             val preparedPart = node.part?.let { preparedPartsByOldId[it.id] }
@@ -1386,8 +1527,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 id = newId,
                 parentId = parentId,
                 part = preparedPart,
-                nodeProperties = remapProperties(node.nodeProperties)
-                    .plus("ParentId" to (parentId ?: "Workspace"))
+                nodeProperties = remapProperties(node.nodeProperties, node.propertyTypeIds)
+                    .plus("ParentId" to (parentId ?: "Workspace")),
+                propertyTypeIds = node.propertyTypeIds
             )
         }
 

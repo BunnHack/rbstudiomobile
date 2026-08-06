@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -24,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -71,6 +73,13 @@ private data class GuiRect(
 private data class GuiGridLayout(
     val cellSize: UDim2Value,
     val cellPadding: UDim2Value
+)
+
+private data class GuiListLayout(
+    val vertical: Boolean,
+    val padding: UDim2Value,
+    val horizontalAlignment: String,
+    val verticalAlignment: String
 )
 
 @Composable
@@ -149,6 +158,15 @@ private fun RobloxGuiNode(
     val xPx = layoutRect?.x ?: (parentWidthPx * position.scaleX + position.offsetX - widthPx * anchor.x)
     val yPx = layoutRect?.y ?: (parentHeightPx * position.scaleY + position.offsetY - heightPx * anchor.y)
     val borderSizePx = node.prop("BorderSizePixel").toFloatRoblox(default = 0f).coerceAtLeast(0f)
+    val decorators = childrenByParent[node.id].orEmpty()
+    val corner = decorators.firstOrNull { it.className == StudioNode.CLASS_UI_CORNER }
+    val cornerRadiusPx = corner?.prop("CornerRadius")?.let(::parseUDim)?.let {
+        minOf(widthPx, heightPx) * it.scaleX + it.offsetX
+    }?.coerceAtLeast(0f) ?: 0f
+    val shape = RoundedCornerShape(with(density) { cornerRadiusPx.toDp() })
+    val stroke = decorators.firstOrNull {
+        it.className == StudioNode.CLASS_UI_STROKE && it.prop("Enabled").isNotFalse()
+    }
     val borderModifier = if (borderSizePx > 0f) {
         Modifier.border(
             width = with(density) { borderSizePx.toDp() },
@@ -163,6 +181,7 @@ private fun RobloxGuiNode(
             .zIndex(node.prop("ZIndex").toIntRoblox(default = 1).toFloat())
             .offset { IntOffset(xPx.roundToInt(), yPx.roundToInt()) }
             .size(with(density) { widthPx.toDp() }, with(density) { heightPx.toDp() })
+            .then(if (cornerRadiusPx > 0f) Modifier.clip(shape) else Modifier)
             .pointerInput(node.id) {
                 detectTapGestures {
                     onSelectNode(node)
@@ -170,6 +189,17 @@ private fun RobloxGuiNode(
             }
             .then(guiBackgroundModifier(node))
             .then(borderModifier)
+            .then(
+                stroke?.let {
+                    Modifier.border(
+                        width = with(density) { it.prop("Thickness").toFloatRoblox(1f).coerceAtLeast(0f).toDp() },
+                        color = parseColor(it.prop("Color"), Color.Black).copy(
+                            alpha = 1f - it.prop("Transparency").toFloatRoblox(0f).coerceIn(0f, 1f)
+                        ),
+                        shape = shape
+                    )
+                } ?: Modifier
+            )
             .then(if (node.prop("ClipsDescendants").isTrue() || node.className == StudioNode.CLASS_SCROLLING_FRAME) Modifier.clipToBounds() else Modifier)
     ) {
         when (node.className) {
@@ -217,6 +247,7 @@ private fun RenderGuiChildren(
             .thenBy { it.prop("ZIndex").toIntRoblox(default = 1) }
             .thenBy { it.name })
     val grid = children.firstOrNull { it.className == "UIGridLayout" }?.toGuiGridLayout()
+    val list = children.firstOrNull { it.className == StudioNode.CLASS_UI_LIST_LAYOUT }?.toGuiListLayout()
     val canvasPosition = if (parentNode.className == StudioNode.CLASS_SCROLLING_FRAME) {
         parseVector2(parentNode.prop("CanvasPosition"))
     } else {
@@ -253,6 +284,58 @@ private fun RenderGuiChildren(
                 onSelectNode = onSelectNode,
                 layoutRect = rect
             )
+        }
+    } else if (list != null) {
+        val padding = if (list.vertical) {
+            parentHeightPx * list.padding.scaleY + list.padding.offsetY
+        } else {
+            parentWidthPx * list.padding.scaleX + list.padding.offsetX
+        }.coerceAtLeast(0f)
+        val widths = renderableChildren.map { it.absoluteWidthIn(parentWidthPx) }
+        val heights = renderableChildren.map { it.absoluteHeightIn(parentHeightPx) }
+        val totalLength = if (list.vertical) heights.sum() else widths.sum()
+        val groupLength = totalLength + padding * (renderableChildren.size - 1).coerceAtLeast(0)
+        var cursor = if (list.vertical) {
+            when (list.verticalAlignment.lowercase()) {
+                "center", "1" -> (parentHeightPx - groupLength) / 2f
+                "bottom", "2" -> parentHeightPx - groupLength
+                else -> 0f
+            }
+        } else {
+            when (list.horizontalAlignment.lowercase()) {
+                "center", "1" -> (parentWidthPx - groupLength) / 2f
+                "right", "2" -> parentWidthPx - groupLength
+                else -> 0f
+            }
+        }
+        renderableChildren.forEachIndexed { index, child ->
+            val width = widths[index]
+            val height = heights[index]
+            val x = if (list.vertical) {
+                when (list.horizontalAlignment.lowercase()) {
+                    "center", "1" -> (parentWidthPx - width) / 2f
+                    "right", "2" -> parentWidthPx - width
+                    else -> 0f
+                }
+            } else cursor
+            val y = if (list.vertical) cursor else {
+                when (list.verticalAlignment.lowercase()) {
+                    "center", "1" -> (parentHeightPx - height) / 2f
+                    "bottom", "2" -> parentHeightPx - height
+                    else -> 0f
+                }
+            }
+            RobloxGuiNode(
+                node = child,
+                childrenByParent = childrenByParent,
+                parentWidthPx = parentWidthPx,
+                parentHeightPx = parentHeightPx,
+                selectedNodeId = selectedNodeId,
+                roblosecurityCookie = roblosecurityCookie,
+                onSelectNode = onSelectNode,
+                layoutRect = GuiRect(x - canvasPosition.x, y - canvasPosition.y, width, height)
+            )
+            cursor += (if (list.vertical) height else width) + padding
         }
     } else {
         renderableChildren
@@ -530,6 +613,21 @@ private fun StudioNode.toGuiGridLayout(): GuiGridLayout =
         cellSize = parseUDim2(prop("CellSize"), defaultOffsetX = 100f, defaultOffsetY = 100f),
         cellPadding = parseUDim2(prop("CellPadding"), defaultOffsetX = 5f, defaultOffsetY = 5f)
     )
+
+private fun StudioNode.toGuiListLayout(): GuiListLayout =
+    GuiListLayout(
+        vertical = prop("FillDirection").lowercase() in setOf("vertical", "1", ""),
+        padding = parseUDim(prop("Padding")),
+        horizontalAlignment = prop("HorizontalAlignment").ifBlank { "Left" },
+        verticalAlignment = prop("VerticalAlignment").ifBlank { "Top" }
+    )
+
+private fun parseUDim(raw: String): UDim2Value {
+    val scale = raw.namedFloat("scale") ?: 0f
+    val offset = raw.namedFloat("offset") ?: Regex("-?\\d+(?:\\.\\d+)?")
+        .findAll(raw).mapNotNull { it.value.toFloatOrNull() }.lastOrNull() ?: 0f
+    return UDim2Value(scale, scale, offset, offset)
+}
 
 private fun StudioNode.absoluteWidthIn(parentWidthPx: Float): Float {
     val size = parseUDim2(prop("Size"), defaultOffsetX = 100f, defaultOffsetY = 100f)

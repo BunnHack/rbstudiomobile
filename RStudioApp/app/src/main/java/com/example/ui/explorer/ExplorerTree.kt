@@ -129,6 +129,10 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("TextBox", Lucide.Code, Color(0xFFD8E8FF), "GUI", StudioNode.CLASS_TEXT_BOX),
     InsertableObject("ImageLabel", Lucide.Image, Color(0xFF83C7FF), "GUI", StudioNode.CLASS_IMAGE_LABEL),
     InsertableObject("ImageButton", Lucide.Image, Color(0xFF4DB6FF), "GUI", StudioNode.CLASS_IMAGE_BUTTON),
+    InsertableObject("SurfaceGui", Lucide.Square, Color(0xFF69D2FF), "GUI", StudioNode.CLASS_SURFACE_GUI),
+    InsertableObject("UIListLayout", Lucide.Layers, Color(0xFF9BD5FF), "GUI", StudioNode.CLASS_UI_LIST_LAYOUT),
+    InsertableObject("UICorner", Lucide.Square, Color(0xFFD8E8FF), "GUI", StudioNode.CLASS_UI_CORNER),
+    InsertableObject("UIStroke", Lucide.Square, Color(0xFFB8D8FF), "GUI", StudioNode.CLASS_UI_STROKE),
     // 3D Interfaces
     InsertableObject("Decal", Lucide.Image, Color(0xFF00A2FF), "3D Interfaces", StudioNode.CLASS_DECAL),
     InsertableObject("Texture", Lucide.Image, Color(0xFF00D0A2), "3D Interfaces", StudioNode.CLASS_TEXTURE),
@@ -141,6 +145,9 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("PointLight", Lucide.Sun, Color(0xFFFFF176), "Effects", StudioNode.CLASS_POINT_LIGHT),
     InsertableObject("SpotLight", Lucide.Sun, Color(0xFFFFD54F), "Effects", StudioNode.CLASS_SPOT_LIGHT),
     InsertableObject("SurfaceLight", Lucide.Sun, Color(0xFFFFB74D), "Effects", StudioNode.CLASS_SURFACE_LIGHT),
+    InsertableObject("Trail", Lucide.Sparkles, Color(0xFFFF8A65), "Effects", StudioNode.CLASS_TRAIL),
+    InsertableObject("Beam", Lucide.Sparkles, Color(0xFFFFCC80), "Effects", StudioNode.CLASS_BEAM),
+    InsertableObject("ParticleEmitter", Lucide.Sparkles, Color(0xFFB39DDB), "Effects", StudioNode.CLASS_PARTICLE_EMITTER),
     InsertableObject("Sky", Lucide.Sun, Color(0xFF81D4FA), "Effects", StudioNode.CLASS_SKY),
     InsertableObject("RemoteEvent", Lucide.Sparkles, Color(0xFF80CBC4), "Communication", StudioNode.CLASS_REMOTE_EVENT)
 )
@@ -232,6 +239,10 @@ private fun iconForNode(node: StudioNode): ImageVector = when {
     node.className == StudioNode.CLASS_ATTACHMENT -> Lucide.Maximize2
     node.className == StudioNode.CLASS_SOUND -> Lucide.Sparkles
     node.className in setOf(StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT) -> Lucide.Sun
+    node.className in StudioNode.EFFECT_CLASS_NAMES -> Lucide.Sparkles
+    node.className in StudioNode.GUI_LAYOUT_CLASS_NAMES -> Lucide.Layers
+    node.className in StudioNode.GUI_DECORATOR_CLASS_NAMES -> Lucide.Square
+    node.className == StudioNode.CLASS_SURFACE_GUI -> Lucide.Square
     node.className == StudioNode.CLASS_REMOTE_EVENT -> Lucide.Sparkles
     node.isGuiObject -> when (node.className) {
         StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON -> Lucide.Image
@@ -243,6 +254,8 @@ private fun iconForNode(node: StudioNode): ImageVector = when {
         Part.SHAPE_SPHERE -> Lucide.Circle
         Part.SHAPE_CYLINDER -> Lucide.Cylinder
         Part.SHAPE_WEDGE -> Lucide.Triangle
+        Part.SHAPE_CORNER_WEDGE -> Lucide.Triangle
+        Part.SHAPE_TRUSS -> Lucide.Layers
         else -> Lucide.Square
     }
     else -> Lucide.Square
@@ -258,6 +271,10 @@ private fun colorForNode(node: StudioNode): Color = when {
     node.className == StudioNode.CLASS_ATTACHMENT -> Color(0xFFFFC857)
     node.className == StudioNode.CLASS_SOUND -> Color(0xFF9B8CFF)
     node.className in setOf(StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT) -> Color(0xFFFFD54F)
+    node.className in StudioNode.EFFECT_CLASS_NAMES -> Color(0xFFFFA45C)
+    node.className in StudioNode.GUI_LAYOUT_CLASS_NAMES -> Color(0xFF9BD5FF)
+    node.className in StudioNode.GUI_DECORATOR_CLASS_NAMES -> Color(0xFFD8E8FF)
+    node.className == StudioNode.CLASS_SURFACE_GUI -> Color(0xFF69D2FF)
     node.className == StudioNode.CLASS_REMOTE_EVENT -> Color(0xFF80CBC4)
     node.isGuiObject -> Color(0xFF83C7FF)
     else -> NodeIconColor

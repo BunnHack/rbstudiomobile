@@ -24,6 +24,8 @@ object StudioNodeGraph {
                 val className = when (part.shape) {
                     Part.SHAPE_SPHERE -> StudioNode.CLASS_BALL_PART
                     Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
+                    Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
+                    Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
                     Part.SHAPE_SPAWN_LOCATION -> StudioNode.CLASS_SPAWN_LOCATION
                     else -> StudioNode.CLASS_PART
                 }
