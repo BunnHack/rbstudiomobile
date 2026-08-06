@@ -174,7 +174,8 @@ private fun RobloxGuiNode(
     ) {
         when (node.className) {
             StudioNode.CLASS_TEXT_LABEL,
-            StudioNode.CLASS_TEXT_BUTTON -> GuiTextContent(node)
+            StudioNode.CLASS_TEXT_BUTTON,
+            StudioNode.CLASS_TEXT_BOX -> GuiTextContent(node)
 
             StudioNode.CLASS_IMAGE_LABEL,
             StudioNode.CLASS_IMAGE_BUTTON -> GuiImageContent(
@@ -519,6 +520,7 @@ private fun StudioNode.isRenderableGuiObject(): Boolean =
     className == StudioNode.CLASS_FRAME ||
         className == StudioNode.CLASS_TEXT_LABEL ||
         className == StudioNode.CLASS_TEXT_BUTTON ||
+        className == StudioNode.CLASS_TEXT_BOX ||
         className == StudioNode.CLASS_IMAGE_LABEL ||
         className == StudioNode.CLASS_IMAGE_BUTTON ||
         className == StudioNode.CLASS_SCROLLING_FRAME

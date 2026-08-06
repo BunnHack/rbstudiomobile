@@ -11,6 +11,7 @@ data class Place(
     val name: String,
     val description: String = "",
     val partsJson: String = "[]",
+    val nodesJson: String = "[]",
     val lastSaved: Long = System.currentTimeMillis(),
     val templateId: String = "empty",
     val robloxUniverseId: Long? = null,

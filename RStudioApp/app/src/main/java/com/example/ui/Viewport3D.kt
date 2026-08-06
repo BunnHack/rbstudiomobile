@@ -27,6 +27,7 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 @Composable
+@Deprecated("Use StudioViewport, which is backed by SceneView/Filament")
 fun Viewport3D(
     viewModel: StudioViewModel,
     parts: List<Part>,

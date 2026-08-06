@@ -7,6 +7,7 @@ import java.util.UUID
 import kotlin.math.cos
 import kotlin.math.sin
 
+@Deprecated("Legacy test-only serializer; production export uses RobloxPlaceBinarySerializer")
 object RobloxPlaceXmlSerializer {
     fun serialize(placeName: String, parts: List<Part>): ByteArray {
         val sb = StringBuilder()

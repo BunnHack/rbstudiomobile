@@ -113,6 +113,8 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Sphere", Lucide.Circle, Color(0xFFAAAAAA), "Frequently Used", StudioNode.CLASS_BALL_PART),
     InsertableObject("Cylinder", Lucide.Cylinder, Color(0xFFAAAAAA), "Frequently Used", "CylinderPart"),
     InsertableObject("Wedge", Lucide.Triangle, Color(0xFFAAAAAA), "Frequently Used", StudioNode.CLASS_WEDGE_PART),
+    InsertableObject("CornerWedgePart", Lucide.Triangle, Color(0xFF9E9E9E), "Frequently Used", StudioNode.CLASS_CORNER_WEDGE_PART),
+    InsertableObject("TrussPart", Lucide.Layers, Color(0xFF9E9E9E), "Frequently Used", StudioNode.CLASS_TRUSS_PART),
     InsertableObject("Script", Lucide.FileCode, Color(0xFFEEEEEE), "Frequently Used", StudioNode.CLASS_SCRIPT),
     InsertableObject("LocalScript", Lucide.FileCode, Color(0xFF9BD5FF), "Frequently Used", StudioNode.CLASS_LOCAL_SCRIPT),
     InsertableObject("ModuleScript", Lucide.FileCode, Color(0xFF67D38B), "Frequently Used", StudioNode.CLASS_MODULE_SCRIPT),
@@ -124,6 +126,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Frame", Lucide.Square, Color(0xFFB8D8FF), "GUI", StudioNode.CLASS_FRAME),
     InsertableObject("TextLabel", Lucide.Code, Color(0xFFE6E6E6), "GUI", StudioNode.CLASS_TEXT_LABEL),
     InsertableObject("TextButton", Lucide.Code, Color(0xFFFFFFFF), "GUI", StudioNode.CLASS_TEXT_BUTTON),
+    InsertableObject("TextBox", Lucide.Code, Color(0xFFD8E8FF), "GUI", StudioNode.CLASS_TEXT_BOX),
     InsertableObject("ImageLabel", Lucide.Image, Color(0xFF83C7FF), "GUI", StudioNode.CLASS_IMAGE_LABEL),
     InsertableObject("ImageButton", Lucide.Image, Color(0xFF4DB6FF), "GUI", StudioNode.CLASS_IMAGE_BUTTON),
     // 3D Interfaces
@@ -138,6 +141,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("PointLight", Lucide.Sun, Color(0xFFFFF176), "Effects", StudioNode.CLASS_POINT_LIGHT),
     InsertableObject("SpotLight", Lucide.Sun, Color(0xFFFFD54F), "Effects", StudioNode.CLASS_SPOT_LIGHT),
     InsertableObject("SurfaceLight", Lucide.Sun, Color(0xFFFFB74D), "Effects", StudioNode.CLASS_SURFACE_LIGHT),
+    InsertableObject("Sky", Lucide.Sun, Color(0xFF81D4FA), "Effects", StudioNode.CLASS_SKY),
     InsertableObject("RemoteEvent", Lucide.Sparkles, Color(0xFF80CBC4), "Communication", StudioNode.CLASS_REMOTE_EVENT)
 )
 
@@ -189,22 +193,32 @@ fun buildExplorerTree(nodes: List<StudioNode>): List<ExplorerEntry> {
 private fun iconForService(className: String): ImageVector = when (className) {
     StudioNode.CLASS_WORKSPACE -> Lucide.Globe
     StudioNode.CLASS_REPLICATED_STORAGE -> Lucide.FolderArchive
+    StudioNode.CLASS_REPLICATED_FIRST -> Lucide.FolderArchive
     StudioNode.CLASS_SERVER_SCRIPT_SERVICE -> Lucide.Server
+    StudioNode.CLASS_SERVER_STORAGE -> Lucide.Server
     StudioNode.CLASS_STARTER_GUI -> Lucide.Square
     StudioNode.CLASS_STARTER_PACK -> Lucide.FolderArchive
     StudioNode.CLASS_LIGHTING -> Lucide.Sun
     StudioNode.CLASS_PLAYERS -> Lucide.Users
+    StudioNode.CLASS_TEAMS -> Lucide.Users
+    StudioNode.CLASS_CHAT -> Lucide.MessageSquare
+    StudioNode.CLASS_SOUND_SERVICE -> Lucide.Sparkles
     else -> Lucide.Globe
 }
 
 private fun colorForService(className: String): Color = when (className) {
     StudioNode.CLASS_WORKSPACE -> Color(0xFF5CC8FF)
     StudioNode.CLASS_REPLICATED_STORAGE -> Color(0xFFE8C86A)
+    StudioNode.CLASS_REPLICATED_FIRST -> Color(0xFFE8C86A)
     StudioNode.CLASS_SERVER_SCRIPT_SERVICE -> Color(0xFFE2E2E2)
+    StudioNode.CLASS_SERVER_STORAGE -> Color(0xFFE2E2E2)
     StudioNode.CLASS_STARTER_GUI -> Color(0xFF69D2FF)
     StudioNode.CLASS_STARTER_PACK -> Color(0xFFFFD76A)
     StudioNode.CLASS_LIGHTING -> Color(0xFFFFD76A)
     StudioNode.CLASS_PLAYERS -> Color(0xFF80C7FF)
+    StudioNode.CLASS_TEAMS -> Color(0xFF80C7FF)
+    StudioNode.CLASS_CHAT -> Color(0xFF80CBC4)
+    StudioNode.CLASS_SOUND_SERVICE -> Color(0xFF9B8CFF)
     else -> NodeIconColor
 }
 
@@ -221,7 +235,7 @@ private fun iconForNode(node: StudioNode): ImageVector = when {
     node.className == StudioNode.CLASS_REMOTE_EVENT -> Lucide.Sparkles
     node.isGuiObject -> when (node.className) {
         StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON -> Lucide.Image
-        StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON -> Lucide.Code
+        StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON, StudioNode.CLASS_TEXT_BOX -> Lucide.Code
         else -> Lucide.Square
     }
     node.part != null -> when (node.part.shape) {

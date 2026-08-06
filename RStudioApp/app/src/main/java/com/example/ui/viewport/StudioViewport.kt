@@ -3,6 +3,7 @@ package com.example.ui.viewport
 import android.view.MotionEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import com.example.models.Part
 import com.example.viewmodels.StudioViewModel
 import com.google.android.filament.Texture
+import com.google.android.filament.LightManager
 import io.github.sceneview.SceneScope
 import io.github.sceneview.SceneView
 import io.github.sceneview.geometries.UvScale
@@ -71,6 +73,7 @@ fun StudioViewport(
     val nodes by viewModel.explorerNodes.collectAsState()
     val roblosecurityCookie by viewModel.roblosecurityCookie.collectAsState()
     val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
+    val lights = remember(nodes, parts) { buildRenderableLights(nodes, parts) }
 
     val engine = rememberEngine()
     val view = rememberView(engine)
@@ -202,6 +205,12 @@ fun StudioViewport(
             DecalNode(materialLoader, decal, part, tex)
         }
 
+        lights.forEach { light ->
+            key(light.id, light.type, light.range, light.angleDegrees, light.shadows) {
+                RobloxLightNode(light)
+            }
+        }
+
         // Selection highlight: a transparent cyan cube slightly larger than the part.
         selectedPart?.let { part ->
             SelectionNode(materialLoader, part)
@@ -211,6 +220,37 @@ fun StudioViewport(
         }
     }
 }
+
+@Composable
+private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
+    val type = when (light.type) {
+        LocalLightType.POINT -> LightManager.Type.POINT
+        LocalLightType.SPOT, LocalLightType.SURFACE -> LightManager.Type.SPOT
+    }
+    val outerCone = Math.toRadians((light.angleDegrees / 2f).toDouble()).toFloat()
+    LightNode(
+        type = type,
+        intensity = if (light.enabled) light.brightness * LOCAL_LIGHT_INTENSITY_SCALE else 0f,
+        position = Position(light.position.x, light.position.y, light.position.z),
+        direction = Direction(light.direction.x, light.direction.y, light.direction.z),
+        color = dev.romainguy.kotlin.math.Float4(
+            colorR(light.colorHex), colorG(light.colorHex), colorB(light.colorHex), 1f
+        ),
+        apply = {
+            falloff(light.range)
+            castShadows(light.shadows)
+            if (type == LightManager.Type.SPOT) {
+                spotLightCone((outerCone * 0.8f).coerceAtLeast(0.01f), outerCone)
+            }
+        },
+        nodeApply = {
+            name = "light:${light.id}"
+            isVisible = light.enabled
+        }
+    )
+}
+
+private const val LOCAL_LIGHT_INTENSITY_SCALE = 1000f
 
 @Composable
 private fun SceneScope.PartNode(

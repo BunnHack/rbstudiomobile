@@ -51,6 +51,26 @@ class StudioNodeGraphTest {
     }
 
     @Test
+    fun explicitPartNodePreventsFallbackDuplicate() {
+        val part = Part("part-1", "Part")
+        val explicitNode = StudioNode(
+            id = "node-1",
+            name = "Part",
+            className = StudioNode.CLASS_TRUSS_PART,
+            parentId = "folder",
+            part = part,
+            nodeProperties = mapOf("Style" to "0")
+        )
+
+        val synced = StudioNodeGraph.syncPartBackedNodes(listOf(explicitNode), listOf(part))
+
+        assertEquals(1, synced.count { it.part?.id == part.id })
+        assertEquals("node-1", synced.single().id)
+        assertEquals(StudioNode.CLASS_TRUSS_PART, synced.single().className)
+        assertEquals("folder", synced.single().parentId)
+    }
+
+    @Test
     fun resolveNodeReturnsNullForDeletedNonPartNode() {
         val deletedFolder = StudioNode("folder", "Folder", StudioNode.CLASS_FOLDER)
 

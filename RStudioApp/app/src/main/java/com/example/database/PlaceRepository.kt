@@ -2,6 +2,7 @@ package com.example.database
 
 import com.example.models.Part
 import com.example.models.Place
+import com.example.models.StudioNode
 import com.example.models.Vector3
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
@@ -15,6 +16,8 @@ class PlaceRepository(private val placeDao: PlaceDao) {
     private val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     private val partListType = Types.newParameterizedType(List::class.java, Part::class.java)
     private val partsAdapter = moshi.adapter<List<Part>>(partListType)
+    private val nodeListType = Types.newParameterizedType(List::class.java, StudioNode::class.java)
+    private val nodesAdapter = moshi.adapter<List<StudioNode>>(nodeListType)
 
     // Expose all places, and automatically seed database with template scenes if empty
     val allPlaces: Flow<List<Place>> = placeDao.getAllPlaces()
@@ -43,6 +46,18 @@ class PlaceRepository(private val placeDao: PlaceDao) {
         } catch (e: Exception) {
             "[]"
         }
+    }
+
+    fun parseNodesJson(json: String): List<StudioNode> = try {
+        nodesAdapter.fromJson(json) ?: emptyList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    fun nodesToJson(nodes: List<StudioNode>): String = try {
+        nodesAdapter.toJson(nodes)
+    } catch (_: Exception) {
+        "[]"
     }
 
     // Seed method to insert templates

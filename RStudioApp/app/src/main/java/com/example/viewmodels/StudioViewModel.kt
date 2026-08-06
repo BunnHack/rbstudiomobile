@@ -60,13 +60,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val selectedNode = _selectedNode.asStateFlow()
 
     /** Service node IDs that can be selected as insertion targets. */
-    val serviceNodeIds = setOf(
-        StudioNode.CLASS_WORKSPACE,
-        StudioNode.CLASS_REPLICATED_STORAGE,
-        StudioNode.CLASS_SERVER_SCRIPT_SERVICE,
-        StudioNode.CLASS_LIGHTING,
-        StudioNode.CLASS_PLAYERS
-    )
+    val serviceNodeIds = StudioNode.SERVICE_CLASS_NAMES
 
     // Screen State
     private val _isLauncherActive = MutableStateFlow(true)
@@ -153,9 +147,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         historyCommitJob = null
         _activePlace.value = place
         val loadedParts = repository.parsePartsJson(place.partsJson)
+        val loadedNodes = normalizeStoredNodes(repository.parseNodesJson(place.nodesJson))
         _parts.value = loadedParts
         _selectedPart.value = null
-        _nodes.value = emptyList()
+        _nodes.value = StudioNodeGraph.syncPartBackedNodes(loadedNodes, loadedParts)
         _selectedNode.value = null
         _isLauncherActive.value = false
         _isPlaying.value = false
@@ -188,6 +183,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val updatedPartsJson = repository.partsToJson(currentParts)
         val updatedPlace = currentPlace.copy(
             partsJson = updatedPartsJson,
+            nodesJson = repository.nodesToJson(_nodes.value),
             lastSaved = System.currentTimeMillis()
         )
         viewModelScope.launch {
@@ -210,6 +206,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             name = name,
             description = description,
             partsJson = repository.partsToJson(currentParts),
+            nodesJson = repository.nodesToJson(_nodes.value),
             lastSaved = System.currentTimeMillis()
         )
         viewModelScope.launch {
@@ -258,6 +255,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     name = name,
                     description = description,
                     partsJson = repository.partsToJson(currentParts),
+                    nodesJson = repository.nodesToJson(_nodes.value),
                     lastSaved = System.currentTimeMillis(),
                     robloxUniverseId = result.universeId ?: currentPlace.robloxUniverseId,
                     robloxPlaceId = result.placeId
@@ -315,7 +313,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // --- History Control ---
-    private fun commitHistory(newParts: List<Part>) {
+    private fun commitHistory(
+        newParts: List<Part>,
+        nodesForSync: List<StudioNode> = _nodes.value
+    ) {
         // Cancel any pending debounced commit — this is a direct, immediate commit.
         historyCommitJob?.cancel()
         historyCommitJob = null
@@ -326,16 +327,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
         history.add(newParts)
         historyIndex = history.size - 1
-        setPartsAndSyncNodes(newParts)
+        setPartsAndSyncNodes(newParts, nodesForSync)
     }
 
-    private fun setPartsAndSyncNodes(newParts: List<Part>) {
+    private fun setPartsAndSyncNodes(
+        newParts: List<Part>,
+        nodesForSync: List<StudioNode> = _nodes.value
+    ) {
         _parts.value = newParts
-        syncNodesWithParts(newParts)
+        syncNodesWithParts(newParts, nodesForSync)
     }
 
-    private fun syncNodesWithParts(parts: List<Part> = _parts.value) {
-        _nodes.value = StudioNodeGraph.syncPartBackedNodes(_nodes.value, parts)
+    private fun syncNodesWithParts(
+        parts: List<Part> = _parts.value,
+        nodesForSync: List<StudioNode> = _nodes.value
+    ) {
+        _nodes.value = StudioNodeGraph.syncPartBackedNodes(nodesForSync, parts)
         _selectedPart.value = _selectedPart.value?.let { selected ->
             parts.find { it.id == selected.id }
         }
@@ -436,6 +443,56 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         else -> selected.id
     }
 
+    private fun defaultServiceNodes(): List<StudioNode> = StudioNode.SERVICE_CLASS_NAMES.map { className ->
+        val properties = linkedMapOf(
+            "ClassName" to className,
+            "Name" to className,
+            "ParentId" to ""
+        )
+        properties += when (className) {
+            StudioNode.CLASS_LIGHTING -> mapOf(
+                "Brightness" to "2.0",
+                "GlobalShadows" to "true",
+                "TimeOfDay" to "14:30:00",
+                "Technology" to "3",
+                "Ambient" to "#808080",
+                "OutdoorAmbient" to "#808080"
+            )
+            StudioNode.CLASS_SOUND_SERVICE -> mapOf(
+                "AmbientReverb" to "0",
+                "DistanceFactor" to "3.33",
+                "DopplerScale" to "1.0",
+                "RespectFilteringEnabled" to "true",
+                "RolloffScale" to "1.0"
+            )
+            else -> emptyMap()
+        }
+        StudioNode(
+            id = className,
+            name = className,
+            className = className,
+            isService = true,
+            nodeProperties = properties
+        )
+    }
+
+    private fun normalizeStoredNodes(nodes: List<StudioNode>): List<StudioNode> {
+        val serviceOverrides = nodes
+            .filter { it.className in StudioNode.SERVICE_CLASS_NAMES }
+            .associateBy { it.className }
+        val services = defaultServiceNodes().map { fallback ->
+            serviceOverrides[fallback.className]?.copy(
+                id = fallback.id,
+                name = fallback.name,
+                parentId = null,
+                part = null,
+                isService = true,
+                nodeProperties = fallback.nodeProperties + serviceOverrides.getValue(fallback.className).nodeProperties
+            ) ?: fallback
+        }
+        return services + nodes.filterNot { it.className in StudioNode.SERVICE_CLASS_NAMES }
+    }
+
     private fun defaultScriptSource(className: String): String =
         when (className) {
             StudioNode.CLASS_LOCAL_SCRIPT -> "-- LocalScript\nprint('Hello from client')\n"
@@ -509,6 +566,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "Range" to "16.0",
                 "Shadows" to "false"
             )
+            StudioNode.CLASS_SKY -> mapOf(
+                "CelestialBodiesShown" to "true",
+                "MoonAngularSize" to "11.0",
+                "MoonTextureId" to "rbxasset://sky/moon.jpg",
+                "SkyboxBk" to "rbxasset://textures/sky/sky512_bk.tex",
+                "SkyboxDn" to "rbxasset://textures/sky/sky512_dn.tex",
+                "SkyboxFt" to "rbxasset://textures/sky/sky512_ft.tex",
+                "SkyboxLf" to "rbxasset://textures/sky/sky512_lf.tex",
+                "SkyboxRt" to "rbxasset://textures/sky/sky512_rt.tex",
+                "SkyboxUp" to "rbxasset://textures/sky/sky512_up.tex",
+                "StarCount" to "3000",
+                "SunAngularSize" to "21.0",
+                "SunTextureId" to "rbxasset://sky/sun.jpg"
+            )
+            StudioNode.CLASS_CLICK_DETECTOR -> mapOf(
+                "CursorIcon" to "",
+                "MaxActivationDistance" to "32.0"
+            )
             else -> emptyMap()
         }
         return identity
@@ -522,6 +597,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         StudioNode.CLASS_POINT_LIGHT,
         StudioNode.CLASS_SPOT_LIGHT,
         StudioNode.CLASS_SURFACE_LIGHT -> selected?.id ?: null
+        StudioNode.CLASS_SKY -> StudioNode.CLASS_LIGHTING
         else -> insertionParentId(selected)
     }
 
@@ -547,7 +623,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         identity += mapOf(
-            "Active" to (className.endsWith("Button")).toString(),
+            "Active" to (className.endsWith("Button") || className == StudioNode.CLASS_TEXT_BOX).toString(),
             "AnchorPoint" to "0.000, 0.000",
             "AutomaticSize" to "None",
             "BackgroundColor3" to "#ffffff",
@@ -565,7 +641,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             "ZIndex" to "1"
         )
 
-        if (className == StudioNode.CLASS_TEXT_LABEL || className == StudioNode.CLASS_TEXT_BUTTON) {
+        if (className == StudioNode.CLASS_TEXT_LABEL ||
+            className == StudioNode.CLASS_TEXT_BUTTON ||
+            className == StudioNode.CLASS_TEXT_BOX
+        ) {
             identity += mapOf(
                 "FontFace" to "family=SourceSans, weight=400, style=0",
                 "RichText" to "false",
@@ -581,6 +660,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "TextWrapped" to "false",
                 "TextXAlignment" to "Center",
                 "TextYAlignment" to "Center"
+            )
+        }
+
+        if (className == StudioNode.CLASS_TEXT_BOX) {
+            identity += mapOf(
+                "ClearTextOnFocus" to "true",
+                "CursorPosition" to "-1",
+                "MultiLine" to "false",
+                "PlaceholderColor3" to "#B2B2B2",
+                "PlaceholderText" to "",
+                "SelectionStart" to "-1",
+                "ShowNativeInput" to "true",
+                "TextEditable" to "true"
             )
         }
 
@@ -673,7 +765,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 // Part-like: create Part + node
                 val shape = when (className) {
                     StudioNode.CLASS_BALL_PART -> Part.SHAPE_SPHERE
-                    StudioNode.CLASS_WEDGE_PART -> Part.SHAPE_WEDGE
+                    StudioNode.CLASS_WEDGE_PART,
+                    StudioNode.CLASS_CORNER_WEDGE_PART -> Part.SHAPE_WEDGE
                     StudioNode.CLASS_SPAWN_LOCATION -> Part.SHAPE_SPAWN_LOCATION
                     else -> Part.SHAPE_BLOCK
                 }
@@ -686,13 +779,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     parentId = parentId,
                     currentPosition = pivot + Vector3(3f, 0f, 0f)
                 )
-                // Sync parts list
-                val partsList = _parts.value + part
-                commitHistory(partsList)
-                _selectedPart.value = part
-                StudioNode(
+                val partNode = StudioNode(
                     id = nodeId, name = part.name, className = className, parentId = parentId, part = part
                 )
+                commitHistory(_parts.value + part, _nodes.value + partNode)
+                _selectedPart.value = part
+                _selectedNode.value = _nodes.value.firstOrNull { it.id == partNode.id } ?: partNode
+                logSystem("Inserted $className '${partNode.name}' into workspace.")
+                return
             }
         }
 
@@ -771,23 +865,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun updateNode(updated: StudioNode) {
-        if (updated.isService || updated.part != null) return
+        if (updated.part != null) return
         _nodes.value = _nodes.value.map { if (it.id == updated.id) updated else it }
         _selectedNode.value = _selectedNode.value?.let { if (it.id == updated.id) updated else it }
     }
 
     /** StateFlow of explorer nodes (services + user nodes + auto-wrapped parts). */
     val explorerNodes: StateFlow<List<StudioNode>> = combine(_nodes, _parts) { userNodes, parts ->
-        val services = listOf(
-            StudioNode(StudioNode.CLASS_WORKSPACE, "Workspace", StudioNode.CLASS_WORKSPACE, isService = true),
-            StudioNode(StudioNode.CLASS_REPLICATED_STORAGE, "ReplicatedStorage", StudioNode.CLASS_REPLICATED_STORAGE, isService = true),
-            StudioNode(StudioNode.CLASS_SERVER_SCRIPT_SERVICE, "ServerScriptService", StudioNode.CLASS_SERVER_SCRIPT_SERVICE, isService = true),
-            StudioNode(StudioNode.CLASS_STARTER_GUI, "StarterGui", StudioNode.CLASS_STARTER_GUI, isService = true),
-            StudioNode(StudioNode.CLASS_STARTER_PACK, "StarterPack", StudioNode.CLASS_STARTER_PACK, isService = true),
-            StudioNode(StudioNode.CLASS_LIGHTING, "Lighting", StudioNode.CLASS_LIGHTING, isService = true),
-            StudioNode(StudioNode.CLASS_PLAYERS, "Players", StudioNode.CLASS_PLAYERS, isService = true)
-        )
-        val syncedUserNodes = StudioNodeGraph.syncPartBackedNodes(userNodes, parts)
+        val services = defaultServiceNodes().map { fallback ->
+            userNodes.firstOrNull { it.isService && it.className == fallback.className } ?: fallback
+        }
+        val syncedUserNodes = StudioNodeGraph.syncPartBackedNodes(userNodes.filterNot { it.isService }, parts)
         val wrappedParts = parts.filter { p -> syncedUserNodes.none { it.part?.id == p.id } }.map { p ->
             StudioNode(p.id, p.name, "Part", p.parentId, part = p)
         }
@@ -900,11 +988,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun deletePart(partId: String) {
+        val rootNodeIds = _nodes.value.filter { it.part?.id == partId }.map { it.id }
+        val descendantIds = rootNodeIds.flatMapTo(linkedSetOf()) {
+            StudioNodeGraph.collectSubtreeIds(_nodes.value, it)
+        }
+        val remainingNodes = _nodes.value.filter { it.id !in descendantIds }
         val list = _parts.value.filter { it.id != partId }
-        commitHistory(list)
+        commitHistory(list, remainingNodes)
         if (_selectedPart.value?.id == partId) _selectedPart.value = null
-        // Also remove from nodes
-        _nodes.value = _nodes.value.filter { it.part?.id != partId }
         logSystem("Deleted part.")
     }
 
@@ -936,19 +1027,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     parentId = parentId,
                     currentPosition = pivot + Vector3(3f, 0f, 0f)
                 )
-                val list = _parts.value + part
-                commitHistory(list)
-                _selectedPart.value = part
                 val node = StudioNode(UUID.randomUUID().toString(), part.name, "CylinderPart", parentId, part = part)
-                _nodes.value = _nodes.value + node
-                _selectedNode.value = node
+                commitHistory(_parts.value + part, _nodes.value + node)
+                _selectedPart.value = part
+                _selectedNode.value = _nodes.value.firstOrNull { it.id == node.id } ?: node
             }
             StudioNode.CLASS_DECAL, StudioNode.CLASS_TEXTURE, StudioNode.CLASS_WELD, StudioNode.CLASS_WELD_CONSTRAINT,
             StudioNode.CLASS_ATTACHMENT, StudioNode.CLASS_REMOTE_EVENT, StudioNode.CLASS_SOUND,
             StudioNode.CLASS_POINT_LIGHT, StudioNode.CLASS_SPOT_LIGHT, StudioNode.CLASS_SURFACE_LIGHT,
             StudioNode.CLASS_SCREEN_GUI, StudioNode.CLASS_FRAME, StudioNode.CLASS_TEXT_LABEL, StudioNode.CLASS_TEXT_BUTTON,
+            StudioNode.CLASS_TEXT_BOX,
             StudioNode.CLASS_IMAGE_LABEL, StudioNode.CLASS_IMAGE_BUTTON,
-            "ClickDetector", "ProximityPrompt", "Dialog" -> {
+            StudioNode.CLASS_SKY, StudioNode.CLASS_CLICK_DETECTOR, "ProximityPrompt", "Dialog" -> {
                 // Non-renderable 3D interface — create as node without part
                 val selected = _selectedNode.value
                 val extraNodes = mutableListOf<StudioNode>()
@@ -996,6 +1086,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     StudioNode.CLASS_POINT_LIGHT,
                     StudioNode.CLASS_SPOT_LIGHT,
                     StudioNode.CLASS_SURFACE_LIGHT -> defaultObjectProperties(className, parentId)
+                    StudioNode.CLASS_SKY,
+                    StudioNode.CLASS_CLICK_DETECTOR -> defaultObjectProperties(className, parentId)
                     else -> mapOf(
                         "ClassName" to className,
                         "Name" to className,
@@ -1226,7 +1318,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         sourceAssetId: Long? = null,
         offsetToSelection: Boolean
     ): PreparedRobloxImport {
-        val idMap = parsed.nodes.associate { it.id to UUID.randomUUID().toString() } +
+        val idMap = parsed.nodes.associate { node ->
+            node.id to if (node.className in StudioNode.SERVICE_CLASS_NAMES) node.className else UUID.randomUUID().toString()
+        } +
             parsed.parts.filter { part -> parsed.nodes.none { it.id == part.id } }
                 .associate { it.id to UUID.randomUUID().toString() }
         val targetParentId = insertionParentId(_selectedNode.value)
@@ -1275,6 +1369,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val preparedNodes = parsed.nodes.map { node ->
+            if (node.className in StudioNode.SERVICE_CLASS_NAMES) {
+                return@map node.copy(
+                    id = node.className,
+                    name = node.className,
+                    parentId = null,
+                    part = null,
+                    isService = true,
+                    nodeProperties = remapProperties(node.nodeProperties)
+                )
+            }
             val preparedPart = node.part?.let { preparedPartsByOldId[it.id] }
             val newId = idMap[node.id] ?: UUID.randomUUID().toString()
             val parentId = remapNodeParent(node)
@@ -1294,7 +1398,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun addPreparedRobloxImport(prepared: PreparedRobloxImport) {
-        _nodes.value = _nodes.value + prepared.nodes
+        _nodes.value = normalizeStoredNodes(_nodes.value + prepared.nodes)
         if (prepared.parts.isNotEmpty()) {
             commitHistory(_parts.value + prepared.parts)
         }

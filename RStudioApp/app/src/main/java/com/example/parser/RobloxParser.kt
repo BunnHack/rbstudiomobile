@@ -1024,8 +1024,14 @@ object RobloxParser {
             val className = if (part != null) {
                 when (part.shape) {
                     Part.SHAPE_SPAWN_LOCATION -> StudioNode.CLASS_SPAWN_LOCATION
-                    Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
-                    Part.SHAPE_SPHERE -> StudioNode.CLASS_BALL_PART
+                    Part.SHAPE_WEDGE -> when (inst.className) {
+                        StudioNode.CLASS_CORNER_WEDGE_PART -> StudioNode.CLASS_CORNER_WEDGE_PART
+                        else -> StudioNode.CLASS_WEDGE_PART
+                    }
+                    Part.SHAPE_SPHERE -> when (inst.className) {
+                        StudioNode.CLASS_BALL_PART -> StudioNode.CLASS_BALL_PART
+                        else -> inst.className
+                    }
                     else -> inst.className
                 }
             } else {
@@ -1039,6 +1045,7 @@ object RobloxParser {
                 parentId = inst.parentId,
                 part = part,
                 scriptSource = inst.properties.source.orEmpty(),
+                isService = inst.className in StudioNode.SERVICE_CLASS_NAMES,
                 nodeProperties = formatNodeProperties(inst)
             )
         }

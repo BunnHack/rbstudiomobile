@@ -253,6 +253,72 @@ class RobloxParserTest {
     }
 
     @Test
+    fun serializedPublishRbxlRoundTripsMultipleDistinctPartColors() {
+        val originals = listOf(
+            Part("part-a", "PartA", colorHex = "#112233"),
+            Part("part-b", "PartB", colorHex = "#F8E8D8")
+        )
+
+        val roundTrip = RobloxParser.instancesToParts(
+            RobloxParser.parseRobloxFile(RobloxPlaceBinarySerializer.serialize("Colors", originals))
+        ).associateBy { it.name }
+
+        assertEquals("#112233", roundTrip.getValue("PartA").colorHex.uppercase())
+        assertEquals("#F8E8D8", roundTrip.getValue("PartB").colorHex.uppercase())
+    }
+
+    @Test
+    fun serializedPublishRbxlPreservesRequestedClassesAndProperties() {
+        val host = Part("part", "HostPart", size = Vector3(4f, 4f, 4f))
+        val nodes = listOf(
+            StudioNode("host-node", "HostPart", StudioNode.CLASS_CORNER_WEDGE_PART, part = host),
+            StudioNode(
+                "text-box",
+                "Input",
+                StudioNode.CLASS_TEXT_BOX,
+                StudioNode.CLASS_STARTER_GUI,
+                nodeProperties = mapOf(
+                    "Text" to "Type here",
+                    "PlaceholderText" to "Name",
+                    "MultiLine" to "true",
+                    "Position" to "scaleX=0.1, scaleY=0.2, offsetX=3, offsetY=4",
+                    "Size" to "scaleX=0.5, scaleY=0.0, offsetX=20, offsetY=40"
+                )
+            ),
+            StudioNode(
+                "sky",
+                "Sky",
+                StudioNode.CLASS_SKY,
+                StudioNode.CLASS_LIGHTING,
+                nodeProperties = mapOf("StarCount" to "42", "SkyboxBk" to "rbxassetid://1")
+            ),
+            StudioNode(
+                "decal",
+                "Decal",
+                StudioNode.CLASS_DECAL,
+                "host-node",
+                nodeProperties = mapOf("Texture" to "rbxassetid://2", "Face" to "Top", "Transparency" to "0.25")
+            )
+        )
+
+        val roundTrip = RobloxParser.instancesToStudioNodes(
+            RobloxParser.parseRobloxFile(RobloxPlaceBinarySerializer.serialize("Classes", listOf(host), nodes))
+        )
+
+        assertTrue(roundTrip.any { it.className == StudioNode.CLASS_CORNER_WEDGE_PART })
+        val textBox = roundTrip.first { it.className == StudioNode.CLASS_TEXT_BOX }
+        assertEquals("Type here", textBox.nodeProperties["Text"])
+        assertEquals("Name", textBox.nodeProperties["PlaceholderText"])
+        assertEquals("true", textBox.nodeProperties["MultiLine"])
+        val sky = roundTrip.first { it.className == StudioNode.CLASS_SKY }
+        assertEquals("42", sky.nodeProperties["StarCount"])
+        assertEquals("rbxassetid://1", sky.nodeProperties["SkyboxBk"])
+        val decal = roundTrip.first { it.className == StudioNode.CLASS_DECAL }
+        assertEquals("rbxassetid://2", decal.nodeProperties["Texture"])
+        assertEquals("Top", decal.nodeProperties["Face"])
+    }
+
+    @Test
     fun serializedPublishRbxlPreservesExtendedStudioNodes() {
         val nodes = listOf(
             StudioNode("attachment", "Attachment", StudioNode.CLASS_ATTACHMENT, "part", nodeProperties = mapOf("Visible" to "true")),

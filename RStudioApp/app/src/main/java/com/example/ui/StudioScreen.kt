@@ -61,6 +61,7 @@ import com.composables.icons.lucide.Move3d
 import com.composables.icons.lucide.Palette
 import com.composables.icons.lucide.Search
 import com.composables.icons.lucide.Square
+import com.composables.icons.lucide.Sun
 import com.composables.icons.lucide.Trash2
 import com.example.ui.explorer.ExplorerTree
 import com.example.ui.properties.GridRow
@@ -1908,7 +1909,7 @@ private fun PropertiesInspectorPanel(
     onEditNodeScript: (StudioNode) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    val inspectedNode = if (selectedPart == null) selectedNode?.takeIf { !it.isService } else null
+    val inspectedNode = if (selectedPart == null) selectedNode else null
 
     Column(modifier = Modifier.fillMaxSize()) {
         // === Title Bar ===
@@ -2355,6 +2356,80 @@ private fun NodePropertiesContent(
             }
         }
 
+        if (node.className in setOf(
+                StudioNode.CLASS_POINT_LIGHT,
+                StudioNode.CLASS_SPOT_LIGHT,
+                StudioNode.CLASS_SURFACE_LIGHT
+            )
+        ) {
+            CollapsibleSection(
+                "Light",
+                Lucide.Sun,
+                q,
+                listOf("enabled", "brightness", "color", "range", "shadows", "angle", "face")
+            ) {
+                if (match("enabled")) {
+                    GridSwitchRow("Enabled", prop("Enabled").ifBlank { "true" }.equals("true", ignoreCase = true)) {
+                        updateProp("Enabled", it.toString())
+                    }
+                }
+                if (match("brightness")) GridEditableTextRow("Brightness", prop("Brightness").ifBlank { "1.0" }) { updateProp("Brightness", it) }
+                if (match("color")) GridColorRow("Color", prop("Color").ifBlank { "#FFFFFF" }) { updateProp("Color", it) }
+                if (match("range")) GridEditableTextRow("Range", prop("Range").ifBlank { "16.0" }) { updateProp("Range", it) }
+                if (match("shadows", "shadow")) {
+                    GridSwitchRow("Shadows", prop("Shadows").equals("true", ignoreCase = true)) {
+                        updateProp("Shadows", it.toString())
+                    }
+                }
+                if (node.className != StudioNode.CLASS_POINT_LIGHT) {
+                    if (match("angle")) GridEditableTextRow("Angle", prop("Angle").ifBlank { "45.0" }) { updateProp("Angle", it) }
+                    if (match("face")) {
+                        GridDropdownRow("Face", prop("Face").ifBlank { "Front" }, listOf("Front", "Back", "Left", "Right", "Top", "Bottom")) {
+                            updateProp("Face", it)
+                        }
+                    }
+                }
+            }
+        }
+
+        if (node.className == StudioNode.CLASS_SKY) {
+            CollapsibleSection(
+                "Sky",
+                Lucide.Sun,
+                q,
+                listOf("celestialbodiesshown", "moonangularsize", "moontextureid", "skybox", "starcount", "sunangularsize", "suntextureid")
+            ) {
+                if (match("celestialbodiesshown")) {
+                    GridSwitchRow("CelestialBodiesShown", prop("CelestialBodiesShown").ifBlank { "true" }.equals("true", true)) {
+                        updateProp("CelestialBodiesShown", it.toString())
+                    }
+                }
+                listOf("MoonAngularSize", "MoonTextureId", "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp", "StarCount", "SunAngularSize", "SunTextureId").forEach { key ->
+                    if (match(key)) GridEditableTextRow(key, prop(key)) { updateProp(key, it) }
+                }
+            }
+        }
+
+        if (node.className == StudioNode.CLASS_LIGHTING) {
+            CollapsibleSection(
+                "Lighting",
+                Lucide.Sun,
+                q,
+                listOf("brightness", "globalshadows", "timeofday", "technology", "ambient", "outdoorambient")
+            ) {
+                if (match("brightness")) GridEditableTextRow("Brightness", prop("Brightness").ifBlank { "2.0" }) { updateProp("Brightness", it) }
+                if (match("globalshadows", "shadows")) {
+                    GridSwitchRow("GlobalShadows", prop("GlobalShadows").ifBlank { "true" }.equals("true", true)) {
+                        updateProp("GlobalShadows", it.toString())
+                    }
+                }
+                if (match("timeofday", "time of day")) GridEditableTextRow("TimeOfDay", prop("TimeOfDay").ifBlank { "14:30:00" }) { updateProp("TimeOfDay", it) }
+                if (match("technology")) GridEditableTextRow("Technology", prop("Technology").ifBlank { "3" }) { updateProp("Technology", it) }
+                if (match("ambient")) GridColorRow("Ambient", prop("Ambient").ifBlank { "#808080" }) { updateProp("Ambient", it) }
+                if (match("outdoorambient", "outdoor ambient")) GridColorRow("OutdoorAmbient", prop("OutdoorAmbient").ifBlank { "#808080" }) { updateProp("OutdoorAmbient", it) }
+            }
+        }
+
         if (node.isGuiObject) {
             if (node.className == StudioNode.CLASS_SCREEN_GUI) {
                 CollapsibleSection(
@@ -2412,7 +2487,10 @@ private fun NodePropertiesContent(
                 }
             }
 
-            if (node.className == StudioNode.CLASS_TEXT_LABEL || node.className == StudioNode.CLASS_TEXT_BUTTON) {
+            if (node.className == StudioNode.CLASS_TEXT_LABEL ||
+                node.className == StudioNode.CLASS_TEXT_BUTTON ||
+                node.className == StudioNode.CLASS_TEXT_BOX
+            ) {
                 CollapsibleSection(
                     "Text",
                     Lucide.Code,
@@ -2441,6 +2519,29 @@ private fun NodePropertiesContent(
                     if (match("texttransparency", "text transparency")) GridEditableTextRow("TextTransparency", prop("TextTransparency")) { updateProp("TextTransparency", it) }
                     if (match("textxalignment", "text x alignment")) GridEditableTextRow("TextXAlignment", prop("TextXAlignment")) { updateProp("TextXAlignment", it) }
                     if (match("textyalignment", "text y alignment")) GridEditableTextRow("TextYAlignment", prop("TextYAlignment")) { updateProp("TextYAlignment", it) }
+                }
+            }
+
+            if (node.className == StudioNode.CLASS_TEXT_BOX) {
+                CollapsibleSection(
+                    "TextBox",
+                    Lucide.Code,
+                    q,
+                    listOf("cleartextonfocus", "multiline", "placeholdercolor3", "placeholdertext", "texteditable")
+                ) {
+                    if (match("cleartextonfocus")) {
+                        GridSwitchRow("ClearTextOnFocus", prop("ClearTextOnFocus").ifBlank { "true" }.equals("true", true)) {
+                            updateProp("ClearTextOnFocus", it.toString())
+                        }
+                    }
+                    if (match("multiline")) {
+                        GridSwitchRow("MultiLine", prop("MultiLine").equals("true", true)) { updateProp("MultiLine", it.toString()) }
+                    }
+                    if (match("placeholdertext", "placeholder")) GridEditableTextRow("PlaceholderText", prop("PlaceholderText")) { updateProp("PlaceholderText", it) }
+                    if (match("placeholdercolor3", "placeholder color")) GridColorRow("PlaceholderColor3", prop("PlaceholderColor3").ifBlank { "#B2B2B2" }) { updateProp("PlaceholderColor3", it) }
+                    if (match("texteditable", "text editable")) {
+                        GridSwitchRow("TextEditable", prop("TextEditable").ifBlank { "true" }.equals("true", true)) { updateProp("TextEditable", it.toString()) }
+                    }
                 }
             }
 
@@ -2485,7 +2586,11 @@ private fun NodePropertiesContent(
             "Text", "TextColor3", "TextDirection", "TextScaled", "TextSize", "TextStrokeColor3", "TextStrokeTransparency",
             "TextTransparency", "TextTruncate", "TextWrapped", "TextXAlignment", "TextYAlignment", "RichText", "FontFace",
             "Image", "HoverImage", "PressedImage", "ImageColor3", "ImageRectOffset", "ImageRectSize", "ImageTransparency", "ScaleType", "TileSize",
-            "Part0", "Part1", "C0", "C1", "Enabled"
+            "Part0", "Part1", "C0", "C1", "Enabled",
+            "Brightness", "Color", "Range", "Shadows", "Angle", "Face",
+            "CelestialBodiesShown", "MoonAngularSize", "MoonTextureId", "SkyboxBk", "SkyboxDn", "SkyboxFt", "SkyboxLf", "SkyboxRt", "SkyboxUp", "StarCount", "SunAngularSize", "SunTextureId",
+            "GlobalShadows", "TimeOfDay", "Technology", "Ambient", "OutdoorAmbient",
+            "ClearTextOnFocus", "CursorPosition", "MultiLine", "PlaceholderColor3", "PlaceholderText", "SelectionStart", "ShowNativeInput", "TextEditable"
         )
         val remaining = node.nodeProperties
             .filterKeys { it !in shownKeys }
@@ -2502,7 +2607,7 @@ private fun NodePropertiesContent(
         }
 
         Spacer(modifier = Modifier.height(8.dp))
-        Button(
+        if (!node.isService) Button(
             onClick = { onDeleteNode(node) },
             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp).height(28.dp),

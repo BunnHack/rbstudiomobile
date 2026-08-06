@@ -48,11 +48,14 @@ data class StudioNode(
         const val CLASS_WELD_CONSTRAINT = "WeldConstraint"
         const val CLASS_SPAWN_LOCATION = "SpawnLocation"
         const val CLASS_WEDGE_PART = "WedgePart"
+        const val CLASS_CORNER_WEDGE_PART = "CornerWedgePart"
+        const val CLASS_TRUSS_PART = "TrussPart"
         const val CLASS_BALL_PART = "BallPart"
         const val CLASS_SCREEN_GUI = "ScreenGui"
         const val CLASS_FRAME = "Frame"
         const val CLASS_TEXT_LABEL = "TextLabel"
         const val CLASS_TEXT_BUTTON = "TextButton"
+        const val CLASS_TEXT_BOX = "TextBox"
         const val CLASS_IMAGE_LABEL = "ImageLabel"
         const val CLASS_IMAGE_BUTTON = "ImageButton"
         const val CLASS_SCROLLING_FRAME = "ScrollingFrame"
@@ -62,21 +65,29 @@ data class StudioNode(
         const val CLASS_POINT_LIGHT = "PointLight"
         const val CLASS_SPOT_LIGHT = "SpotLight"
         const val CLASS_SURFACE_LIGHT = "SurfaceLight"
+        const val CLASS_SKY = "Sky"
+        const val CLASS_CLICK_DETECTOR = "ClickDetector"
 
         // Service class names
         const val CLASS_WORKSPACE = "Workspace"
         const val CLASS_REPLICATED_STORAGE = "ReplicatedStorage"
+        const val CLASS_REPLICATED_FIRST = "ReplicatedFirst"
         const val CLASS_SERVER_SCRIPT_SERVICE = "ServerScriptService"
+        const val CLASS_SERVER_STORAGE = "ServerStorage"
         const val CLASS_STARTER_GUI = "StarterGui"
         const val CLASS_STARTER_PACK = "StarterPack"
         const val CLASS_LIGHTING = "Lighting"
         const val CLASS_PLAYERS = "Players"
+        const val CLASS_TEAMS = "Teams"
+        const val CLASS_CHAT = "Chat"
+        const val CLASS_SOUND_SERVICE = "SoundService"
 
         val GUI_CLASS_NAMES: Set<String> = setOf(
             CLASS_SCREEN_GUI,
             CLASS_FRAME,
             CLASS_TEXT_LABEL,
             CLASS_TEXT_BUTTON,
+            CLASS_TEXT_BOX,
             CLASS_IMAGE_LABEL,
             CLASS_IMAGE_BUTTON,
             CLASS_SCROLLING_FRAME
@@ -92,6 +103,21 @@ data class StudioNode(
             CLASS_SCREEN_GUI,
             CLASS_FRAME,
             CLASS_SCROLLING_FRAME
+        )
+
+        val SERVICE_CLASS_NAMES: Set<String> = setOf(
+            CLASS_WORKSPACE,
+            CLASS_REPLICATED_FIRST,
+            CLASS_REPLICATED_STORAGE,
+            CLASS_SERVER_SCRIPT_SERVICE,
+            CLASS_SERVER_STORAGE,
+            CLASS_STARTER_GUI,
+            CLASS_STARTER_PACK,
+            CLASS_LIGHTING,
+            CLASS_PLAYERS,
+            CLASS_TEAMS,
+            CLASS_CHAT,
+            CLASS_SOUND_SERVICE
         )
     }
 }
