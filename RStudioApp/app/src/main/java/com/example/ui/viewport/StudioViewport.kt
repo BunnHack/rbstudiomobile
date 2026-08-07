@@ -6,7 +6,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -124,7 +123,7 @@ fun StudioViewport(
         environmentLoader.createKTX1Environment(
             "environments/neutral/neutral_ibl.ktx",
             if (showSky) "environments/neutral/neutral_skybox.ktx" else null
-        ).also { it.indirectLight?.setIntensity((lightingBrightness * 15_000f).coerceAtLeast(1_000f)) }
+        ).also { it.indirectLight?.setIntensity((lightingBrightness * 5_000f).coerceAtLeast(1_000f)) }
     }
     val mainLightNode = remember(engine) {
         LightNode(
@@ -132,7 +131,7 @@ fun StudioViewport(
             type = LightManager.Type.SUN,
             apply = {
                 direction(-0.35f, -0.85f, -0.4f)
-                intensity(lightingBrightness * 25_000f)
+                intensity(lightingBrightness * 5_000f)
                 castShadows(globalShadows)
                 sunAngularRadius(1.2f)
                 shadowOptions(com.google.android.filament.LightManager.ShadowOptions().apply {
@@ -148,7 +147,7 @@ fun StudioViewport(
         )
     }
     LaunchedEffect(mainLightNode, lightingBrightness, globalShadows) {
-        mainLightNode.intensity = lightingBrightness * 25_000f
+        mainLightNode.intensity = lightingBrightness * 5_000f
         mainLightNode.isShadowCaster = globalShadows
     }
     val collisionSystem = rememberCollisionSystem(view)
@@ -158,7 +157,6 @@ fun StudioViewport(
         )
     }
     var gizmoDrag by remember { mutableStateOf<GizmoDragState?>(null) }
-    var gizmoCameraDistance by remember { mutableFloatStateOf(zoom.coerceAtLeast(0.5f)) }
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember(engine, context) { RobloxTextureLoader(engine, OkHttpClient(), context.assets) }
@@ -236,7 +234,7 @@ fun StudioViewport(
                             handle = handle,
                             event = event,
                             cameraNode = cameraNode,
-                            handleLength = gizmoLength(gizmoCameraDistance)
+                            handleLength = GIZMO_LENGTH
                         )
                         true
                     } else {
@@ -264,12 +262,6 @@ fun StudioViewport(
                     }
                 }
                 else -> gizmoDrag != null
-            }
-        },
-        onFrame = {
-            val distance = cameraManipulator.distance.coerceAtLeast(0.5f)
-            if (kotlin.math.abs(distance - gizmoCameraDistance) > distance * 0.03f) {
-                gizmoCameraDistance = distance
             }
         }
     ) {
@@ -373,7 +365,7 @@ fun StudioViewport(
         selectedPart?.let { part ->
             SelectionNode(materialLoader, part)
             if (activeTool != "SELECT") {
-                TransformGizmo(materialLoader, part, activeTool, gizmoCameraDistance)
+                TransformGizmo(materialLoader, part, activeTool)
             }
         }
     }
@@ -392,9 +384,9 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
         position = Position(light.position.x, light.position.y, light.position.z),
         direction = Direction(light.direction.x, light.direction.y, light.direction.z),
         color = dev.romainguy.kotlin.math.Float4(
-            srgbToLinear(colorR(light.colorHex)),
-            srgbToLinear(colorG(light.colorHex)),
-            srgbToLinear(colorB(light.colorHex)),
+            colorR(light.colorHex),
+            colorG(light.colorHex),
+            colorB(light.colorHex),
             1f
         ),
         apply = {
@@ -410,7 +402,7 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
     )
 }
 
-private const val LOCAL_LIGHT_INTENSITY_SCALE = 4_000f
+private const val LOCAL_LIGHT_INTENSITY_SCALE = 20_000f
 
 @Composable
 private fun SceneScope.PartNode(
@@ -731,7 +723,7 @@ private enum class GizmoAxis(val x: Float, val y: Float, val z: Float) {
     Z(0f, 0f, 1f)
 }
 
-private data class GizmoHandle(val tool: String, val axis: GizmoAxis)
+private data class GizmoHandle(val tool: String, val axis: GizmoAxis, val sign: Float = 1f)
 
 private data class GizmoDragState(
     val part: Part,
@@ -749,13 +741,14 @@ private data class GizmoDragState(
         val worldDelta = signedPixels / pixelsPerWorldUnit.coerceAtLeast(0.25f)
         val axis = handle.axis
         return when (handle.tool) {
-            "MOVE" -> part.copy(
-                position = com.example.models.Vector3(
-                    part.position.x + axis.x * worldDelta,
-                    part.position.y + axis.y * worldDelta,
-                    part.position.z + axis.z * worldDelta
+            "MOVE" -> {
+                val position = com.example.models.Vector3(
+                    part.position.x + axis.x * worldDelta * handle.sign,
+                    part.position.y + axis.y * worldDelta * handle.sign,
+                    part.position.z + axis.z * worldDelta * handle.sign
                 )
-            )
+                part.copy(position = position, currentPosition = position)
+            }
             "SCALE" -> part.copy(
                 size = com.example.models.Vector3(
                     (part.size.x + axis.x * worldDelta).coerceAtLeast(0.05f),
@@ -765,12 +758,14 @@ private data class GizmoDragState(
             )
             "ROTATE" -> {
                 val degrees = signedPixels * 0.65f
+                val rotation = com.example.models.Vector3(
+                    part.rotation.x + axis.x * degrees,
+                    part.rotation.y + axis.y * degrees,
+                    part.rotation.z + axis.z * degrees
+                )
                 part.copy(
-                    rotation = com.example.models.Vector3(
-                        part.rotation.x + axis.x * degrees,
-                        part.rotation.y + axis.y * degrees,
-                        part.rotation.z + axis.z * degrees
-                    )
+                    rotation = rotation,
+                    currentRotation = rotation
                 )
             }
             else -> part
@@ -781,10 +776,11 @@ private data class GizmoDragState(
 private fun parseGizmoHandle(name: String): GizmoHandle? {
     if (!name.startsWith("gizmo:")) return null
     val fields = name.split(':')
-    if (fields.size != 3) return null
+    if (fields.size !in 3..4) return null
     val tool = fields[1]
     val axis = runCatching { GizmoAxis.valueOf(fields[2]) }.getOrNull() ?: return null
-    return GizmoHandle(tool, axis)
+    val sign = if (fields.getOrNull(3) == "NEG") -1f else 1f
+    return GizmoHandle(tool, axis, sign)
 }
 
 private fun createGizmoDragState(
@@ -800,9 +796,9 @@ private fun createGizmoDragState(
         part.position.z
     )
     val endpoint = io.github.sceneview.collision.Vector3(
-        part.position.x + handle.axis.x * handleLength,
-        part.position.y + handle.axis.y * handleLength,
-        part.position.z + handle.axis.z * handleLength
+        part.position.x + handle.axis.x * handleLength * handle.sign,
+        part.position.y + handle.axis.y * handleLength * handle.sign,
+        part.position.z + handle.axis.z * handleLength * handle.sign
     )
     @Suppress("DEPRECATION")
     val originScreen = cameraNode.worldToScreenPoint(origin)
@@ -822,25 +818,25 @@ private fun createGizmoDragState(
     )
 }
 
-/** 18% of camera distance keeps the gizmo nearly constant in screen space. */
-private fun gizmoLength(cameraDistance: Float): Float =
-    (cameraDistance * 0.18f).coerceIn(1.5f, 80f)
+private const val GIZMO_LENGTH = 4f
+private const val GIZMO_ROD_RADIUS = 0.07f
+private const val GIZMO_ENDPOINT_SIZE = 0.65f
 
 /** Visible Roblox-style world-axis transform handles for MOVE / SCALE / ROTATE. */
 @Composable
 private fun SceneScope.TransformGizmo(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
     part: Part,
-    tool: String,
-    cameraDistance: Float
+    tool: String
 ) {
     val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)) }
     val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)) }
     val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)) }
-    val center = Position(part.position.x, part.position.y, part.position.z)
-    val length = gizmoLength(cameraDistance)
-    val rodRadius = (length * 0.035f).coerceIn(0.08f, 0.3f)
-    val endpointSize = (length * 0.14f).coerceIn(0.3f, 1.2f)
+    val white = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 1f, 1f, 1f)) }
+    val center = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z)
+    val length = GIZMO_LENGTH
+    val rodRadius = GIZMO_ROD_RADIUS
+    val endpointSize = GIZMO_ENDPOINT_SIZE
 
     val axes = listOf(
         Triple(GizmoAxis.X, red, Rotation(0f, 0f, -90f)),
@@ -867,59 +863,82 @@ private fun SceneScope.TransformGizmo(
         return
     }
 
+    SphereNode(
+        radius = 0.14f,
+        materialInstance = white,
+        position = center,
+        apply = {
+            name = "gizmo-center"
+            isTouchable = false
+            isHittable = false
+            setPriority(7)
+        }
+    )
+
     axes.forEach { (axis, material, rotation) ->
-        val half = length * 0.5f
-        val rodCenter = Position(
-            center.x + axis.x * half,
-            center.y + axis.y * half,
-            center.z + axis.z * half
-        )
-        val endpoint = Position(
-            center.x + axis.x * length,
-            center.y + axis.y * length,
-            center.z + axis.z * length
-        )
-        CylinderNode(
-            radius = rodRadius,
-            height = length,
-            materialInstance = material,
-            position = rodCenter,
-            rotation = rotation,
-            apply = {
-                name = "gizmo:$tool:${axis.name}"
-                isTouchable = true
-                isHittable = true
-                setPriority(7)
+        val signs = if (tool == "MOVE") listOf(1f, -1f) else listOf(1f)
+        signs.forEach { sign ->
+            val half = length * 0.5f * sign
+            val suffix = if (sign < 0f) ":NEG" else ""
+            val rodCenter = Position(
+                center.x + axis.x * half,
+                center.y + axis.y * half,
+                center.z + axis.z * half
+            )
+            val endpoint = Position(
+                center.x + axis.x * length * sign,
+                center.y + axis.y * length * sign,
+                center.z + axis.z * length * sign
+            )
+            val signedRotation = if (sign < 0f) reverseAxisRotation(axis, rotation) else rotation
+            CylinderNode(
+                radius = rodRadius,
+                height = length,
+                materialInstance = material,
+                position = rodCenter,
+                rotation = signedRotation,
+                apply = {
+                    name = "gizmo:$tool:${axis.name}$suffix"
+                    isTouchable = true
+                    isHittable = true
+                    setPriority(7)
+                }
+            )
+            if (tool == "MOVE") {
+                ConeNode(
+                    radius = endpointSize * 0.45f,
+                    height = endpointSize,
+                    materialInstance = material,
+                    position = endpoint,
+                    rotation = signedRotation,
+                    apply = {
+                        name = "gizmo:MOVE:${axis.name}$suffix"
+                        isTouchable = true
+                        isHittable = true
+                        setPriority(7)
+                    }
+                )
+            } else {
+                CubeNode(
+                    size = Size(endpointSize, endpointSize, endpointSize),
+                    materialInstance = material,
+                    position = endpoint,
+                    apply = {
+                        name = "gizmo:SCALE:${axis.name}"
+                        isTouchable = true
+                        isHittable = true
+                        setPriority(7)
+                    }
+                )
             }
-        )
-        if (tool == "MOVE") {
-            ConeNode(
-                radius = endpointSize * 0.45f,
-                height = endpointSize,
-                materialInstance = material,
-                position = endpoint,
-                rotation = rotation,
-                apply = {
-                    name = "gizmo:MOVE:${axis.name}"
-                    isTouchable = true
-                    isHittable = true
-                    setPriority(7)
-                }
-            )
-        } else {
-            CubeNode(
-                size = Size(endpointSize, endpointSize, endpointSize),
-                materialInstance = material,
-                position = endpoint,
-                apply = {
-                    name = "gizmo:SCALE:${axis.name}"
-                    isTouchable = true
-                    isHittable = true
-                    setPriority(7)
-                }
-            )
         }
     }
+}
+
+private fun reverseAxisRotation(axis: GizmoAxis, rotation: Rotation): Rotation = when (axis) {
+    GizmoAxis.X -> Rotation(rotation.x, rotation.y, 90f)
+    GizmoAxis.Y -> Rotation(180f, rotation.y, rotation.z)
+    GizmoAxis.Z -> Rotation(-90f, rotation.y, rotation.z)
 }
 
 @Composable

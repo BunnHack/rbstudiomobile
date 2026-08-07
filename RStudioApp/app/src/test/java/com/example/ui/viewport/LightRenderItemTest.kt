@@ -68,4 +68,25 @@ class LightRenderItemTest {
         assertEquals(1f, item.direction.x, 0.0001f)
         assertEquals(0f, item.direction.z, 0.0001f)
     }
+
+    @Test
+    fun reflectsPointLightColorAndRangePropertyChanges() {
+        val part = Part("part", "Host")
+        val initial = StudioNode(
+            "light",
+            "PointLight",
+            StudioNode.CLASS_POINT_LIGHT,
+            parentId = "part",
+            nodeProperties = mapOf("Color" to "#FFFFFF", "Range" to "8")
+        )
+        val updated = initial.copy(nodeProperties = initial.nodeProperties + mapOf("Color" to "#00FF80", "Range" to "32"))
+
+        val before = buildRenderableLights(listOf(initial), listOf(part)).single()
+        val after = buildRenderableLights(listOf(updated), listOf(part)).single()
+
+        assertEquals("#FFFFFF", before.colorHex)
+        assertEquals(8f, before.range)
+        assertEquals("#00FF80", after.colorHex)
+        assertEquals(32f, after.range)
+    }
 }
