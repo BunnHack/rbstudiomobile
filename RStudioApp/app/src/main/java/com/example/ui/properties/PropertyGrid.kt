@@ -25,6 +25,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -335,9 +337,19 @@ fun CompactTextInput(
     onValueChange: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var draft by remember { mutableStateOf(value) }
+    var focused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(value, focused) {
+        if (!focused && draft != value) draft = value
+    }
+
     BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = draft,
+        onValueChange = { updated ->
+            draft = updated
+            onValueChange(updated)
+        },
         singleLine = true,
         textStyle = TextStyle(fontSize = 10.sp, color = Color.White),
         cursorBrush = androidx.compose.ui.graphics.SolidColor(AccentColor),
@@ -353,7 +365,11 @@ fun CompactTextInput(
                 innerTextField()
             }
         },
-        modifier = modifier
+        modifier = modifier.onFocusChanged { state ->
+            val wasFocused = focused
+            focused = state.isFocused
+            if (wasFocused && !focused && draft != value) onValueChange(draft)
+        }
     )
 }
 

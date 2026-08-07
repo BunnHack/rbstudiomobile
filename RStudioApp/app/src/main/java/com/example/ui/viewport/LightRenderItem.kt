@@ -10,6 +10,7 @@ enum class LocalLightType { POINT, SPOT, SURFACE }
 
 data class LocalLightRenderItem(
     val id: String,
+    val hostPartId: String,
     val type: LocalLightType,
     val position: Vector3,
     val direction: Vector3,
@@ -43,6 +44,7 @@ fun buildRenderableLights(nodes: List<StudioNode>, parts: List<Part>): List<Loca
         }
         LocalLightRenderItem(
             id = node.id,
+            hostPartId = part.id,
             type = type,
             position = position,
             direction = worldDirection,

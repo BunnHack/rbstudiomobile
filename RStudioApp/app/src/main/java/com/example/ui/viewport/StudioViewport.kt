@@ -82,6 +82,7 @@ fun StudioViewport(
     val context = LocalContext.current
     val decals = remember(nodes, parts) { buildRenderableDecals(nodes, parts) }
     val lights = remember(nodes, parts) { buildRenderableLights(nodes, parts) }
+    val lightsByHostPart = remember(lights) { lights.groupBy { it.hostPartId } }
     val ribbons = remember(nodes, parts) { buildRibbonEffects(nodes, parts) }
     val particleEmitters = remember(nodes, parts) { buildParticleEmitters(nodes, parts) }
     val surfaceGuis = remember(nodes, parts) { buildSurfaceGuis(nodes, parts) }
@@ -273,6 +274,7 @@ fun StudioViewport(
                 PartNode(
                     materialLoader = materialLoader,
                     part = part,
+                    attachedLights = lightsByHostPart[part.id].orEmpty(),
                     onSelect = { viewModel.selectPart(part) }
                 )
             }
@@ -380,16 +382,17 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
     val outerCone = Math.toRadians((light.angleDegrees / 2f).toDouble()).toFloat()
     LightNode(
         type = type,
-        intensity = if (light.enabled) light.brightness * LOCAL_LIGHT_INTENSITY_SCALE else 0f,
-        position = Position(light.position.x, light.position.y, light.position.z),
-        direction = Direction(light.direction.x, light.direction.y, light.direction.z),
-        color = dev.romainguy.kotlin.math.Float4(
-            colorR(light.colorHex),
-            colorG(light.colorHex),
-            colorB(light.colorHex),
-            1f
-        ),
         apply = {
+            color(
+                colorR(light.colorHex),
+                colorG(light.colorHex),
+                colorB(light.colorHex)
+            )
+            if (type == LightManager.Type.POINT) {
+                intensity(if (light.enabled) light.brightness * LOCAL_POINT_LIGHT_LUMENS else 0f, 1f)
+            } else {
+                intensityCandela(if (light.enabled) light.brightness * LOCAL_SPOT_LIGHT_CANDELAS else 0f)
+            }
             falloff(light.range)
             castShadows(light.shadows)
             if (type == LightManager.Type.SPOT) {
@@ -398,22 +401,27 @@ private fun SceneScope.RobloxLightNode(light: LocalLightRenderItem) {
         },
         nodeApply = {
             name = "light:${light.id}"
+            position = Position(light.position.x, light.position.y, light.position.z)
+            lightDirection = Direction(light.direction.x, light.direction.y, light.direction.z)
         }
     )
 }
 
-private const val LOCAL_LIGHT_INTENSITY_SCALE = 20_000f
+private const val LOCAL_POINT_LIGHT_LUMENS = 1_500f
+private const val LOCAL_SPOT_LIGHT_CANDELAS = 12_000f
 
 @Composable
 private fun SceneScope.PartNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
     part: Part,
+    attachedLights: List<LocalLightRenderItem>,
     onSelect: () -> Unit
 ) {
     val appearance = remember(part.material, part.reflectance) { materialAppearance(part) }
-    val material = remember(part.colorHex, part.transparency, appearance) {
+    val previewColor = remember(part.colorHex, attachedLights) { previewPartColor(part.colorHex, attachedLights) }
+    val material = remember(previewColor, part.transparency, appearance) {
         val color = dev.romainguy.kotlin.math.Float4(
-            colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex),
+            previewColor.x, previewColor.y, previewColor.z,
             1f - part.transparency.coerceIn(0f, 1f)
         )
         if (appearance.unlit) {
@@ -490,6 +498,22 @@ private fun SceneScope.PartNode(
             apply = editConfig
         )
     }
+}
+
+private fun previewPartColor(
+    baseHex: String,
+    attachedLights: List<LocalLightRenderItem>
+): dev.romainguy.kotlin.math.Float3 {
+    var r = colorR(baseHex)
+    var g = colorG(baseHex)
+    var b = colorB(baseHex)
+    attachedLights.filter { it.enabled && it.brightness > 0f && it.range > 0f }.forEach { light ->
+        val strength = (0.08f + light.brightness * 0.035f + light.range * 0.003f).coerceIn(0.08f, 0.42f)
+        r = (r * (1f - strength) + colorR(light.colorHex) * strength).coerceIn(0f, 1f)
+        g = (g * (1f - strength) + colorG(light.colorHex) * strength).coerceIn(0f, 1f)
+        b = (b * (1f - strength) + colorB(light.colorHex) * strength).coerceIn(0f, 1f)
+    }
+    return dev.romainguy.kotlin.math.Float3(r, g, b)
 }
 
 /**
@@ -878,7 +902,8 @@ private fun SceneScope.TransformGizmo(
     axes.forEach { (axis, material, rotation) ->
         val signs = if (tool == "MOVE") listOf(1f, -1f) else listOf(1f)
         signs.forEach { sign ->
-            val half = length * 0.5f * sign
+            val surfaceOffset = axisHalfExtent(part, axis)
+            val half = (surfaceOffset + length * 0.5f) * sign
             val suffix = if (sign < 0f) ":NEG" else ""
             val rodCenter = Position(
                 center.x + axis.x * half,
@@ -886,9 +911,9 @@ private fun SceneScope.TransformGizmo(
                 center.z + axis.z * half
             )
             val endpoint = Position(
-                center.x + axis.x * length * sign,
-                center.y + axis.y * length * sign,
-                center.z + axis.z * length * sign
+                center.x + axis.x * (surfaceOffset + length) * sign,
+                center.y + axis.y * (surfaceOffset + length) * sign,
+                center.z + axis.z * (surfaceOffset + length) * sign
             )
             val signedRotation = if (sign < 0f) reverseAxisRotation(axis, rotation) else rotation
             CylinderNode(
@@ -934,6 +959,12 @@ private fun SceneScope.TransformGizmo(
         }
     }
 }
+
+private fun axisHalfExtent(part: Part, axis: GizmoAxis): Float = when (axis) {
+    GizmoAxis.X -> part.size.x / 2f
+    GizmoAxis.Y -> part.size.y / 2f
+    GizmoAxis.Z -> part.size.z / 2f
+}.coerceAtLeast(0f)
 
 private fun reverseAxisRotation(axis: GizmoAxis, rotation: Rotation): Rotation = when (axis) {
     GizmoAxis.X -> Rotation(rotation.x, rotation.y, 90f)

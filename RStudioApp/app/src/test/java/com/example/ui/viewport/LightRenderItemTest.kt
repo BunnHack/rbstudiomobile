@@ -23,6 +23,7 @@ class LightRenderItemTest {
         val item = buildRenderableLights(listOf(partNode, light), listOf(part)).single()
 
         assertEquals(LocalLightType.POINT, item.type)
+        assertEquals("part", item.hostPartId)
         assertEquals(Vector3(1f, 2f, 3f), item.position)
         assertEquals(2.5f, item.brightness)
         assertEquals(24f, item.range)
