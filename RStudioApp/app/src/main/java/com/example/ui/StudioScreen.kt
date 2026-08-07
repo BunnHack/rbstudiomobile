@@ -2023,9 +2023,20 @@ private fun PropertiesInspectorPanel(
                                 Part.SHAPE_WEDGE,
                                 Part.SHAPE_CORNER_WEDGE,
                                 Part.SHAPE_TRUSS,
+                                Part.SHAPE_MESH,
                                 Part.SHAPE_SPAWN_LOCATION
                             )) {
                             onUpdatePart(selectedPart.copy(shape = it))
+                        }
+                    }
+                    if (selectedPart.shape == Part.SHAPE_MESH) {
+                        if (match("meshid", "mesh id")) GridEditableTextRow("MeshId", selectedPart.meshId) { onUpdatePart(selectedPart.copy(meshId = it)) }
+                        if (match("textureid", "texture id")) GridEditableTextRow("TextureID", selectedPart.textureId) { onUpdatePart(selectedPart.copy(textureId = it)) }
+                        if (match("doublesided", "double sided")) GridSwitchRow("DoubleSided", selectedPart.doubleSided) { onUpdatePart(selectedPart.copy(doubleSided = it)) }
+                        if (match("renderfidelity", "render fidelity")) {
+                            GridDropdownRow("RenderFidelity", when (selectedPart.renderFidelity) { 1 -> "Precise"; 2 -> "Performance"; else -> "Automatic" }, listOf("Automatic", "Precise", "Performance")) {
+                                onUpdatePart(selectedPart.copy(renderFidelity = when (it) { "Precise" -> 1; "Performance" -> 2; else -> 0 }))
+                            }
                         }
                     }
                     if (selectedPart.shape == Part.SHAPE_TRUSS && match("trussstyle", "truss style", "style")) {
@@ -2543,6 +2554,30 @@ private fun NodePropertiesContent(
             }
         }
 
+        if (node.className == StudioNode.CLASS_UI_GRADIENT) {
+            val keys = listOf("Color", "Enabled", "Offset", "Rotation", "Transparency")
+            CollapsibleSection("UIGradient", Lucide.Palette, q, keys.map(String::lowercase)) {
+                if (match("color")) GridEditableTextRow("Color", prop("Color")) { updateProp("Color", it) }
+                if (match("enabled")) GridSwitchRow("Enabled", prop("Enabled").ifBlank { "true" }.equals("true", true)) { updateProp("Enabled", it.toString()) }
+                if (match("offset")) GridEditableTextRow("Offset", prop("Offset")) { updateProp("Offset", it) }
+                if (match("rotation")) GridEditableTextRow("Rotation", prop("Rotation")) { updateProp("Rotation", it) }
+                if (match("transparency")) GridEditableTextRow("Transparency", prop("Transparency")) { updateProp("Transparency", it) }
+            }
+        }
+
+        if (node.className == StudioNode.CLASS_HIGHLIGHT) {
+            val keys = listOf("Adornee", "DepthMode", "Enabled", "FillColor", "FillTransparency", "OutlineColor", "OutlineTransparency")
+            CollapsibleSection("Highlight", Lucide.Sparkles, q, keys.map(String::lowercase)) {
+                if (match("adornee")) GridEditableTextRow("Adornee", prop("Adornee")) { updateProp("Adornee", it) }
+                if (match("depthmode")) GridDropdownRow("DepthMode", prop("DepthMode").ifBlank { "AlwaysOnTop" }, listOf("AlwaysOnTop", "Occluded")) { updateProp("DepthMode", it) }
+                if (match("enabled")) GridSwitchRow("Enabled", prop("Enabled").ifBlank { "true" }.equals("true", true)) { updateProp("Enabled", it.toString()) }
+                if (match("fillcolor")) GridColorRow("FillColor", prop("FillColor").ifBlank { "#FF0000" }) { updateProp("FillColor", it) }
+                if (match("filltransparency")) GridEditableTextRow("FillTransparency", prop("FillTransparency")) { updateProp("FillTransparency", it) }
+                if (match("outlinecolor")) GridColorRow("OutlineColor", prop("OutlineColor").ifBlank { "#FFFFFF" }) { updateProp("OutlineColor", it) }
+                if (match("outlinetransparency")) GridEditableTextRow("OutlineTransparency", prop("OutlineTransparency")) { updateProp("OutlineTransparency", it) }
+            }
+        }
+
         if (node.isGuiObject) {
             if (node.className == StudioNode.CLASS_SCREEN_GUI) {
                 CollapsibleSection(
@@ -2708,7 +2743,8 @@ private fun NodePropertiesContent(
             "CurveSize0", "CurveSize1", "Segments", "TextureSpeed", "Width0", "Width1", "ZOffset", "Acceleration", "Drag",
             "EmissionDirection", "Rate", "Speed", "SpreadAngle", "Adornee", "AlwaysOnTop", "CanvasSize", "LightInfluence",
             "PixelsPerStud", "SizingMode", "FillDirection", "HorizontalAlignment", "Padding", "SortOrder", "VerticalAlignment",
-            "Wraps", "CornerRadius", "ApplyStrokeMode", "LineJoinMode", "Thickness"
+            "Wraps", "CornerRadius", "ApplyStrokeMode", "LineJoinMode", "Thickness", "Offset",
+            "DepthMode", "FillColor", "FillTransparency", "OutlineColor", "OutlineTransparency"
         )
         val remaining = node.nodeProperties
             .filterKeys { it !in shownKeys }

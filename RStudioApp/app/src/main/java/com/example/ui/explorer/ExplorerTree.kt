@@ -115,6 +115,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Wedge", Lucide.Triangle, Color(0xFFAAAAAA), "Frequently Used", StudioNode.CLASS_WEDGE_PART),
     InsertableObject("CornerWedgePart", Lucide.Triangle, Color(0xFF9E9E9E), "Frequently Used", StudioNode.CLASS_CORNER_WEDGE_PART),
     InsertableObject("TrussPart", Lucide.Layers, Color(0xFF9E9E9E), "Frequently Used", StudioNode.CLASS_TRUSS_PART),
+    InsertableObject("MeshPart", Lucide.Box, Color(0xFF90CAF9), "Frequently Used", StudioNode.CLASS_MESH_PART),
     InsertableObject("Script", Lucide.FileCode, Color(0xFFEEEEEE), "Frequently Used", StudioNode.CLASS_SCRIPT),
     InsertableObject("LocalScript", Lucide.FileCode, Color(0xFF9BD5FF), "Frequently Used", StudioNode.CLASS_LOCAL_SCRIPT),
     InsertableObject("ModuleScript", Lucide.FileCode, Color(0xFF67D38B), "Frequently Used", StudioNode.CLASS_MODULE_SCRIPT),
@@ -133,6 +134,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("UIListLayout", Lucide.Layers, Color(0xFF9BD5FF), "GUI", StudioNode.CLASS_UI_LIST_LAYOUT),
     InsertableObject("UICorner", Lucide.Square, Color(0xFFD8E8FF), "GUI", StudioNode.CLASS_UI_CORNER),
     InsertableObject("UIStroke", Lucide.Square, Color(0xFFB8D8FF), "GUI", StudioNode.CLASS_UI_STROKE),
+    InsertableObject("UIGradient", Lucide.Square, Color(0xFFCE93D8), "GUI", StudioNode.CLASS_UI_GRADIENT),
     // 3D Interfaces
     InsertableObject("Decal", Lucide.Image, Color(0xFF00A2FF), "3D Interfaces", StudioNode.CLASS_DECAL),
     InsertableObject("Texture", Lucide.Image, Color(0xFF00D0A2), "3D Interfaces", StudioNode.CLASS_TEXTURE),
@@ -148,6 +150,7 @@ private val INSERT_OBJECTS = listOf(
     InsertableObject("Trail", Lucide.Sparkles, Color(0xFFFF8A65), "Effects", StudioNode.CLASS_TRAIL),
     InsertableObject("Beam", Lucide.Sparkles, Color(0xFFFFCC80), "Effects", StudioNode.CLASS_BEAM),
     InsertableObject("ParticleEmitter", Lucide.Sparkles, Color(0xFFB39DDB), "Effects", StudioNode.CLASS_PARTICLE_EMITTER),
+    InsertableObject("Highlight", Lucide.Sparkles, Color(0xFFFF80AB), "Effects", StudioNode.CLASS_HIGHLIGHT),
     InsertableObject("Sky", Lucide.Sun, Color(0xFF81D4FA), "Effects", StudioNode.CLASS_SKY),
     InsertableObject("RemoteEvent", Lucide.Sparkles, Color(0xFF80CBC4), "Communication", StudioNode.CLASS_REMOTE_EVENT)
 )
@@ -256,6 +259,7 @@ private fun iconForNode(node: StudioNode): ImageVector = when {
         Part.SHAPE_WEDGE -> Lucide.Triangle
         Part.SHAPE_CORNER_WEDGE -> Lucide.Triangle
         Part.SHAPE_TRUSS -> Lucide.Layers
+        Part.SHAPE_MESH -> Lucide.Box
         else -> Lucide.Square
     }
     else -> Lucide.Square

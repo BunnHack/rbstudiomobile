@@ -120,6 +120,13 @@ object RobloxPlaceBinarySerializer {
             if (instance.className == StudioNode.CLASS_TRUSS_PART) {
                 instance.props["Style"] = part.trussStyle
             }
+            if (instance.className == StudioNode.CLASS_MESH_PART) {
+                instance.props["MeshId"] = part.meshId
+                instance.props["TextureID"] = part.textureId
+                instance.props["DoubleSided"] = part.doubleSided
+                instance.props["RenderFidelity"] = part.renderFidelity
+                instance.props["InitialSize"] = part.initialSize
+            }
             if (instance.className == "SpawnLocation") {
                 instance.props["AllowTeamChangeOnTouch"] = part.allowTeamChangeOnTouch
                 instance.props["Duration"] = part.duration
@@ -366,6 +373,22 @@ object RobloxPlaceBinarySerializer {
                 instance.props["Thickness"] = float("Thickness", 1f)
                 instance.props["Transparency"] = float("Transparency", 0f)
             }
+            StudioNode.CLASS_UI_GRADIENT -> {
+                instance.props["Color"] = parseColorSequence(prop("Color", "0:#FFFFFF:0; 1:#FFFFFF:0"))
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["Offset"] = parseVector2(prop("Offset", "0, 0"))
+                instance.props["Rotation"] = float("Rotation", 0f)
+                instance.props["Transparency"] = parseNumberSequence(prop("Transparency", "0:0:0; 1:0:0"))
+            }
+            StudioNode.CLASS_HIGHLIGHT -> {
+                instance.props["Adornee"] = prop("Adornee")
+                instance.props["DepthMode"] = if (prop("DepthMode", "AlwaysOnTop").equals("Occluded", true)) 1 else 0
+                instance.props["Enabled"] = bool("Enabled", true)
+                instance.props["FillColor"] = colorRgbFromHex(prop("FillColor", "#FF0000"))
+                instance.props["FillTransparency"] = float("FillTransparency", 0.5f)
+                instance.props["OutlineColor"] = colorRgbFromHex(prop("OutlineColor", "#FFFFFF"))
+                instance.props["OutlineTransparency"] = float("OutlineTransparency", 0f)
+            }
             StudioNode.CLASS_SCREEN_GUI -> {
                 instance.props["Enabled"] = bool("Enabled", true)
                 instance.props["ResetOnSpawn"] = bool("ResetOnSpawn", true)
@@ -453,6 +476,7 @@ object RobloxPlaceBinarySerializer {
         Part.SHAPE_WEDGE -> "WedgePart"
         Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
         Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
+        Part.SHAPE_MESH -> StudioNode.CLASS_MESH_PART
         Part.SHAPE_SPAWN_LOCATION -> "SpawnLocation"
         else -> "Part"
     }
@@ -563,6 +587,13 @@ object RobloxPlaceBinarySerializer {
                 if (className == StudioNode.CLASS_TRUSS_PART) {
                     writeEnumProp(writer, classId, "style", instances.map { it.props["Style"] as? Int ?: 0 })
                 }
+                if (className == StudioNode.CLASS_MESH_PART) {
+                    writeBoolProp(writer, classId, "DoubleSided", instances.map { it.props["DoubleSided"] as? Boolean ?: false })
+                    writeVector3Prop(writer, classId, "InitialSize", instances.map { it.props["InitialSize"] as? Vector3 ?: Vector3(2f, 2f, 2f) })
+                    writeStringProp(writer, classId, "MeshId", instances.map { it.props["MeshId"] as? String ?: "" })
+                    writeEnumProp(writer, classId, "RenderFidelity", instances.map { it.props["RenderFidelity"] as? Int ?: 0 })
+                    writeStringProp(writer, classId, "TextureID", instances.map { it.props["TextureID"] as? String ?: "" })
+                }
             }
             "Script", "LocalScript", "ModuleScript" -> {
                 writeStringProp(writer, classId, "Source", instances.map { it.props["Source"] as? String ?: "" })
@@ -650,6 +681,22 @@ object RobloxPlaceBinarySerializer {
                 writeEnumProp(writer, classId, "LineJoinMode", instances.map { it.props["LineJoinMode"] as? Int ?: 0 })
                 writeFloatProp(writer, classId, "Thickness", instances.map { it.props["Thickness"] as? Float ?: 1f })
                 writeFloatProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? Float ?: 0f })
+            }
+            StudioNode.CLASS_UI_GRADIENT -> {
+                writeColorSequenceProp(writer, classId, "Color", instances.map { it.props["Color"] as? List<ColorSequencePoint> ?: defaultColorSequence() })
+                writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+                writeVector2Prop(writer, classId, "Offset", instances.map { it.props["Offset"] as? Vector2Value ?: Vector2Value(0f, 0f) })
+                writeFloatProp(writer, classId, "Rotation", instances.map { it.props["Rotation"] as? Float ?: 0f })
+                writeNumberSequenceProp(writer, classId, "Transparency", instances.map { it.props["Transparency"] as? List<NumberSequencePoint> ?: defaultNumberSequence(0f, 0f) })
+            }
+            StudioNode.CLASS_HIGHLIGHT -> {
+                writeRefProp(writer, classId, "Adornee", instances.map { it.props["Adornee"] as? InstanceRecord })
+                writeEnumProp(writer, classId, "DepthMode", instances.map { it.props["DepthMode"] as? Int ?: 0 })
+                writeBoolProp(writer, classId, "Enabled", instances.map { it.props["Enabled"] as? Boolean ?: true })
+                writeColor3Prop(writer, classId, "FillColor", instances.map { it.props["FillColor"] as? RgbColor ?: colorRgbFromHex("#FF0000") })
+                writeFloatProp(writer, classId, "FillTransparency", instances.map { it.props["FillTransparency"] as? Float ?: 0.5f })
+                writeColor3Prop(writer, classId, "OutlineColor", instances.map { it.props["OutlineColor"] as? RgbColor ?: colorRgbFromHex("#FFFFFF") })
+                writeFloatProp(writer, classId, "OutlineTransparency", instances.map { it.props["OutlineTransparency"] as? Float ?: 0f })
             }
             StudioNode.CLASS_SCREEN_GUI -> writeScreenGuiProps(writer, classId, instances)
             in StudioNode.GUI_CLASS_NAMES -> writeGuiObjectProps(writer, classId, className, instances)
@@ -1433,11 +1480,11 @@ object RobloxPlaceBinarySerializer {
         "Script", "LocalScript", "ModuleScript", "Attachment", "RemoteEvent",
         "Sound", "PointLight", "SpotLight", "SurfaceLight", "Folder", "Model",
         "Weld", "WeldConstraint", "ClickDetector", "Decal", "Texture", "Sky",
-        "Trail", "Beam", "ParticleEmitter", "SurfaceGui", "UIListLayout", "UICorner", "UIStroke"
+        "Trail", "Beam", "ParticleEmitter", "SurfaceGui", "UIListLayout", "UICorner", "UIStroke", "Highlight", "UIGradient"
     ) + StudioNode.GUI_CLASS_NAMES
 
     private val BASE_PART_CLASSES = setOf(
-        "Part", "WedgePart", "SpawnLocation", "CornerWedgePart", "TrussPart"
+        "Part", "WedgePart", "SpawnLocation", "CornerWedgePart", "TrussPart", "MeshPart"
     )
 
     private val TEXT_GUI_CLASSES = setOf(

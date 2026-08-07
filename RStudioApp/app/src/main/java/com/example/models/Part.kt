@@ -48,6 +48,11 @@ data class Part(
     val script: String = "",
     val effect: String = EFFECT_NONE,
     val trussStyle: Int = TRUSS_STYLE_ALTERNATING_SUPPORTS,
+    val meshId: String = "",
+    val textureId: String = "",
+    val doubleSided: Boolean = false,
+    val renderFidelity: Int = 0,
+    val initialSize: Vector3 = size,
     // Transient physics states
     val currentPosition: Vector3 = position,
     val currentRotation: Vector3 = rotation,
@@ -60,6 +65,7 @@ data class Part(
         const val SHAPE_WEDGE = "WEDGE"
         const val SHAPE_CORNER_WEDGE = "CORNER_WEDGE"
         const val SHAPE_TRUSS = "TRUSS"
+        const val SHAPE_MESH = "MESH"
         const val SHAPE_SPAWN_LOCATION = "SPAWN_LOCATION"
 
         const val TRUSS_STYLE_ALTERNATING_SUPPORTS = 0

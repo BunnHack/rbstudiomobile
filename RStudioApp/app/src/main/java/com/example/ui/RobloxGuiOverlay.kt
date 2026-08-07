@@ -27,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -167,6 +169,9 @@ private fun RobloxGuiNode(
     val stroke = decorators.firstOrNull {
         it.className == StudioNode.CLASS_UI_STROKE && it.prop("Enabled").isNotFalse()
     }
+    val gradient = decorators.firstOrNull {
+        it.className == StudioNode.CLASS_UI_GRADIENT && it.prop("Enabled").isNotFalse()
+    }
     val borderModifier = if (borderSizePx > 0f) {
         Modifier.border(
             width = with(density) { borderSizePx.toDp() },
@@ -187,7 +192,7 @@ private fun RobloxGuiNode(
                     onSelectNode(node)
                 }
             }
-            .then(guiBackgroundModifier(node))
+            .then(guiBackgroundModifier(node, gradient, widthPx, heightPx))
             .then(borderModifier)
             .then(
                 stroke?.let {
@@ -506,11 +511,37 @@ private fun GuiImageContent(
     }
 }
 
-private fun guiBackgroundModifier(node: StudioNode): Modifier {
+private fun guiBackgroundModifier(node: StudioNode, gradient: StudioNode?, widthPx: Float, heightPx: Float): Modifier {
     val transparency = node.prop("BackgroundTransparency").toFloatRoblox(default = 0f).coerceIn(0f, 1f)
     if (transparency >= 1f) return Modifier
+    if (gradient != null) {
+        val colors = parseGradientColors(gradient.prop("Color"), gradient.prop("Transparency"), 1f - transparency)
+        if (colors.size >= 2) {
+            val angle = Math.toRadians(gradient.prop("Rotation").toFloatRoblox(0f).toDouble())
+            val offset = parseVector2(gradient.prop("Offset"))
+            val centerX = widthPx * (0.5f + offset.x)
+            val centerY = heightPx * (0.5f + offset.y)
+            val radius = kotlin.math.sqrt(widthPx * widthPx + heightPx * heightPx) / 2f
+            val dx = kotlin.math.cos(angle).toFloat() * radius
+            val dy = kotlin.math.sin(angle).toFloat() * radius
+            return Modifier.background(
+                Brush.linearGradient(colors, Offset(centerX - dx, centerY - dy), Offset(centerX + dx, centerY + dy))
+            )
+        }
+    }
     val color = parseColor(node.prop("BackgroundColor3"), Color.White).copy(alpha = 1f - transparency)
     return Modifier.background(color)
+}
+
+private fun parseGradientColors(colorSequence: String, transparencySequence: String, parentAlpha: Float): List<Color> {
+    val transparency = Regex("(?:^|;)\\s*([0-9.]+)\\s*:\\s*([0-9.]+)")
+        .findAll(transparencySequence).mapNotNull { it.groupValues[2].toFloatOrNull() }.toList()
+    return Regex("(?:^|;)\\s*([0-9.]+)\\s*:\\s*(#[0-9a-fA-F]{6})")
+        .findAll(colorSequence).mapIndexed { index, match ->
+            parseColor(match.groupValues[2], Color.White).copy(
+                alpha = parentAlpha * (1f - transparency.getOrElse(index) { transparency.lastOrNull() ?: 0f }.coerceIn(0f, 1f))
+            )
+        }.toList()
 }
 
 private fun loadGuiImage(

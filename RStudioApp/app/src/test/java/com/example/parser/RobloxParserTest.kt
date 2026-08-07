@@ -355,6 +355,36 @@ class RobloxParserTest {
     }
 
     @Test
+    fun meshPartFixturesPreserveMeshProperties() {
+        listOf("MeshPart.rbxm", "MeshPart2.rbxm").forEach { fixture ->
+            val file = File("/workspaces/Gemini-3-model-card/rbxtest/$fixture")
+            if (!file.exists()) return@forEach
+
+            val part = RobloxParser.instancesToParts(RobloxParser.parseRobloxFile(file.readBytes())).single()
+
+            assertEquals(Part.SHAPE_MESH, part.shape)
+            assertTrue(part.meshId.startsWith("rbxassetid://"))
+            assertTrue(part.initialSize.x > 0f)
+        }
+    }
+
+    @Test
+    fun highlightAndUiGradientFixturesExposeRenderingProperties() {
+        val highlightFile = File("/workspaces/Gemini-3-model-card/rbxtest/Highlight.rbxm")
+        val gradientFile = File("/workspaces/Gemini-3-model-card/rbxtest/UIGradient.rbxm")
+        if (!highlightFile.exists() || !gradientFile.exists()) return
+
+        val highlight = RobloxParser.instancesToStudioNodes(RobloxParser.parseRobloxFile(highlightFile.readBytes())).single()
+        val gradient = RobloxParser.instancesToStudioNodes(RobloxParser.parseRobloxFile(gradientFile.readBytes())).single()
+
+        assertEquals(StudioNode.CLASS_HIGHLIGHT, highlight.className)
+        assertEquals("#ff0000", highlight.nodeProperties["FillColor"]?.lowercase())
+        assertEquals(StudioNode.CLASS_UI_GRADIENT, gradient.className)
+        assertTrue(gradient.nodeProperties["Color"].orEmpty().contains("#0f27ff", true))
+        assertEquals("0.0", gradient.nodeProperties["Rotation"])
+    }
+
+    @Test
     fun serializedPublishRbxlPreservesExtendedStudioNodes() {
         val nodes = listOf(
             StudioNode("attachment", "Attachment", StudioNode.CLASS_ATTACHMENT, "part", nodeProperties = mapOf("Visible" to "true")),

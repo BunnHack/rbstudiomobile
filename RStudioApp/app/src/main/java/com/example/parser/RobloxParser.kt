@@ -1064,7 +1064,8 @@ object RobloxParser {
                     "Cylinder" -> Part.SHAPE_CYLINDER
                     else -> Part.SHAPE_BLOCK // "Block" or null → default
                 }
-                "MeshPart", "UnionOperation", "NegateOperation" -> Part.SHAPE_BLOCK
+                "MeshPart" -> Part.SHAPE_MESH
+                "UnionOperation", "NegateOperation" -> Part.SHAPE_BLOCK
                 "TrussPart" -> Part.SHAPE_TRUSS
                 "WedgePart" -> Part.SHAPE_WEDGE
                 "CornerWedgePart" -> Part.SHAPE_CORNER_WEDGE
@@ -1110,6 +1111,15 @@ object RobloxParser {
                 } else {
                     Part.TRUSS_STYLE_ALTERNATING_SUPPORTS
                 },
+                meshId = if (cls == StudioNode.CLASS_MESH_PART) {
+                    pickProp(inst.rawProperties, "MeshId", "MeshID")?.toString().orEmpty()
+                } else "",
+                textureId = if (cls == StudioNode.CLASS_MESH_PART) {
+                    pickProp(inst.rawProperties, "TextureID", "TextureId")?.toString().orEmpty()
+                } else "",
+                doubleSided = (pickProp(inst.rawProperties, "DoubleSided") as? Boolean) ?: false,
+                renderFidelity = (pickProp(inst.rawProperties, "RenderFidelity") as? Number)?.toInt() ?: 0,
+                initialSize = (pickProp(inst.rawProperties, "InitialSize") as? Vec3)?.let { Vector3(it.x, it.y, it.z) } ?: size,
                 position = pos,
                 size = size,
                 rotation = rot,
@@ -1169,6 +1179,7 @@ object RobloxParser {
                     Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
                     Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
                     Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
+                    Part.SHAPE_MESH -> StudioNode.CLASS_MESH_PART
                     Part.SHAPE_SPHERE -> when (inst.className) {
                         StudioNode.CLASS_BALL_PART -> StudioNode.CLASS_BALL_PART
                         else -> inst.className

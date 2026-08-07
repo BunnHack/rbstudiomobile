@@ -37,7 +37,6 @@ import io.github.sceneview.node.CylinderNode
 import io.github.sceneview.node.LineNode
 import io.github.sceneview.node.TorusNode
 import io.github.sceneview.node.TextNode
-import io.github.sceneview.node.LightNode
 import io.github.sceneview.rememberCameraNode
 import io.github.sceneview.rememberCollisionSystem
 import io.github.sceneview.rememberEngine
@@ -86,11 +85,10 @@ fun StudioViewport(
     val ribbons = remember(nodes, parts) { buildRibbonEffects(nodes, parts) }
     val particleEmitters = remember(nodes, parts) { buildParticleEmitters(nodes, parts) }
     val surfaceGuis = remember(nodes, parts) { buildSurfaceGuis(nodes, parts) }
+    val highlights = remember(nodes, parts) { buildHighlights(nodes, parts) }
     val lightingNode = nodes.lastOrNull { it.className == com.example.models.StudioNode.CLASS_LIGHTING }
     val lightingBrightness = lightingNode?.nodeProperties?.entries
         ?.firstOrNull { it.key.equals("Brightness", true) }?.value?.toFloatOrNull()?.coerceIn(0f, 10f) ?: 2f
-    val globalShadows = lightingNode?.nodeProperties?.entries
-        ?.firstOrNull { it.key.equals("GlobalShadows", true) }?.value?.toBooleanStrictOrNull() ?: true
     val skyNode = nodes.lastOrNull { it.className == com.example.models.StudioNode.CLASS_SKY }
     val showSky = skyNode != null
     val skyFaces = remember(skyNode) {
@@ -126,31 +124,6 @@ fun StudioViewport(
             if (showSky) "environments/neutral/neutral_skybox.ktx" else null
         ).also { it.indirectLight?.setIntensity((lightingBrightness * 5_000f).coerceAtLeast(1_000f)) }
     }
-    val mainLightNode = remember(engine) {
-        LightNode(
-            engine = engine,
-            type = LightManager.Type.SUN,
-            apply = {
-                direction(-0.35f, -0.85f, -0.4f)
-                intensity(lightingBrightness * 5_000f)
-                castShadows(globalShadows)
-                sunAngularRadius(1.2f)
-                shadowOptions(com.google.android.filament.LightManager.ShadowOptions().apply {
-                    mapSize = 2048
-                    shadowCascades = 4
-                    normalBias = 1.2f
-                    constantBias = 0.003f
-                    stable = true
-                    screenSpaceContactShadows = false
-                    maxShadowDistance = 500f
-                })
-            }
-        )
-    }
-    LaunchedEffect(mainLightNode, lightingBrightness, globalShadows) {
-        mainLightNode.intensity = lightingBrightness * 5_000f
-        mainLightNode.isShadowCaster = globalShadows
-    }
     val collisionSystem = rememberCollisionSystem(view)
     val cameraManipulator = remember {
         DistanceScaledCameraManipulator(
@@ -161,12 +134,32 @@ fun StudioViewport(
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember(engine, context) { RobloxTextureLoader(engine, OkHttpClient(), context.assets) }
+    val meshLoader = remember(engine) { RobloxMeshLoader(engine, OkHttpClient()) }
+    val meshGeometries = remember { mutableStateMapOf<String, io.github.sceneview.geometries.Geometry>() }
+    val meshTextures = remember { mutableStateMapOf<String, Texture>() }
     var customSkybox by remember { mutableStateOf<Skybox?>(null) }
     // Loaded decal textures by "uri|repeat"; populated asynchronously.
     val decalTextures = remember { mutableStateMapOf<String, Texture>() }
 
     LaunchedEffect(roblosecurityCookie) {
         textureLoader.roblosecurityCookie = roblosecurityCookie
+        meshLoader.roblosecurityCookie = roblosecurityCookie
+    }
+
+    parts.filter { it.shape == Part.SHAPE_MESH && it.meshId.isNotBlank() }.forEach { part ->
+        if (part.meshId !in meshGeometries) {
+            scope.launch { meshLoader.load(part.meshId)?.let { meshGeometries[part.meshId] = it } }
+        }
+        if (part.textureId.isNotBlank() && part.id !in meshTextures) {
+            scope.launch {
+                textureLoader.load(
+                    textureUri = part.textureId,
+                    repeating = false,
+                    tint = RobloxTextureLoader.TintColor(colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex)),
+                    alpha = 1f - part.transparency
+                )?.let { meshTextures[part.id] = it }
+            }
+        }
     }
 
     LaunchedEffect(skyFaces, roblosecurityCookie) {
@@ -210,7 +203,7 @@ fun StudioViewport(
         materialLoader = materialLoader,
         environmentLoader = environmentLoader,
         environment = environment,
-        mainLightNode = mainLightNode,
+        mainLightNode = null,
         fillLightNode = null,
         view = view,
         cameraNode = cameraNode,
@@ -275,6 +268,8 @@ fun StudioViewport(
                     materialLoader = materialLoader,
                     part = part,
                     attachedLights = lightsByHostPart[part.id].orEmpty(),
+                    meshGeometry = meshGeometries[part.meshId],
+                    meshTexture = meshTextures[part.id],
                     onSelect = { viewModel.selectPart(part) }
                 )
             }
@@ -363,6 +358,10 @@ fun StudioViewport(
             )
         }
 
+        highlights.filter { it.enabled }.forEach { highlight ->
+            partsById[highlight.targetPartId]?.let { part -> HighlightNode(materialLoader, part, highlight) }
+        }
+
         // Selection highlight: a transparent cyan cube slightly larger than the part.
         selectedPart?.let { part ->
             SelectionNode(materialLoader, part)
@@ -370,6 +369,34 @@ fun StudioViewport(
                 TransformGizmo(materialLoader, part, activeTool)
             }
         }
+    }
+}
+
+@Composable
+private fun SceneScope.HighlightNode(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    part: Part,
+    highlight: HighlightRenderItem
+) {
+    if (highlight.fillTransparency < 1f) {
+        val fill = remember(highlight) {
+            materialLoader.createUnlitColorInstance(
+                dev.romainguy.kotlin.math.Float4(
+                    colorR(highlight.fillColorHex), colorG(highlight.fillColorHex), colorB(highlight.fillColorHex),
+                    1f - highlight.fillTransparency
+                )
+            ).apply { if (highlight.alwaysOnTop) setDepthCulling(false) }
+        }
+        CubeNode(
+            size = Size(1.015f, 1.015f, 1.015f), materialInstance = fill,
+            position = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z),
+            rotation = Rotation(part.currentRotation.x, part.currentRotation.y, part.currentRotation.z),
+            scale = Scale(part.size.x, part.size.y, part.size.z),
+            apply = { isHittable = false; isTouchable = false; setPriority(6) }
+        )
+    }
+    if (highlight.outlineTransparency < 1f) {
+        SelectionNode(materialLoader, part, highlight.outlineColorHex, 1f - highlight.outlineTransparency, highlight.alwaysOnTop)
     }
 }
 
@@ -415,11 +442,14 @@ private fun SceneScope.PartNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
     part: Part,
     attachedLights: List<LocalLightRenderItem>,
+    meshGeometry: io.github.sceneview.geometries.Geometry?,
+    meshTexture: Texture?,
     onSelect: () -> Unit
 ) {
     val appearance = remember(part.material, part.reflectance) { materialAppearance(part) }
     val previewColor = remember(part.colorHex, attachedLights) { previewPartColor(part.colorHex, attachedLights) }
-    val material = remember(previewColor, part.transparency, appearance) {
+    val material = remember(previewColor, part.transparency, appearance, meshTexture) {
+        if (meshTexture != null) return@remember materialLoader.createTextureInstance(meshTexture, part.transparency <= 0f)
         val color = dev.romainguy.kotlin.math.Float4(
             previewColor.x, previewColor.y, previewColor.z,
             1f - part.transparency.coerceIn(0f, 1f)
@@ -489,6 +519,28 @@ private fun SceneScope.PartNode(
             rotation = rotation,
             apply = editConfig
         )
+        Part.SHAPE_MESH -> if (meshGeometry != null) {
+            MeshNode(
+                primitiveType = com.google.android.filament.RenderableManager.PrimitiveType.TRIANGLES,
+                vertexBuffer = meshGeometry.vertexBuffer,
+                indexBuffer = meshGeometry.indexBuffer,
+                boundingBox = meshGeometry.boundingBox,
+                materialInstance = material,
+                apply = {
+                    this.position = position
+                    this.rotation = rotation
+                    this.scale = Scale(
+                        part.size.x / part.initialSize.x.coerceAtLeast(0.0001f),
+                        part.size.y / part.initialSize.y.coerceAtLeast(0.0001f),
+                        part.size.z / part.initialSize.z.coerceAtLeast(0.0001f)
+                    )
+                    setCulling(!part.doubleSided)
+                    editConfig()
+                }
+            )
+        } else {
+            CubeNode(size = Size(1f, 1f, 1f), materialInstance = material, position = position, rotation = rotation, scale = scale, apply = editConfig)
+        }
         else -> CubeNode(
             size = Size(1f, 1f, 1f),
             materialInstance = material,
@@ -853,10 +905,10 @@ private fun SceneScope.TransformGizmo(
     part: Part,
     tool: String
 ) {
-    val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)) }
-    val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)) }
-    val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)) }
-    val white = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 1f, 1f, 1f)) }
+    val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)).apply { setDepthCulling(false) } }
+    val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)).apply { setDepthCulling(false) } }
+    val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)).apply { setDepthCulling(false) } }
+    val white = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 1f, 1f, 1f)).apply { setDepthCulling(false) } }
     val center = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z)
     val length = GIZMO_LENGTH
     val rodRadius = GIZMO_ROD_RADIUS
@@ -902,8 +954,7 @@ private fun SceneScope.TransformGizmo(
     axes.forEach { (axis, material, rotation) ->
         val signs = if (tool == "MOVE") listOf(1f, -1f) else listOf(1f)
         signs.forEach { sign ->
-            val surfaceOffset = axisHalfExtent(part, axis)
-            val half = (surfaceOffset + length * 0.5f) * sign
+            val half = length * 0.5f * sign
             val suffix = if (sign < 0f) ":NEG" else ""
             val rodCenter = Position(
                 center.x + axis.x * half,
@@ -911,9 +962,9 @@ private fun SceneScope.TransformGizmo(
                 center.z + axis.z * half
             )
             val endpoint = Position(
-                center.x + axis.x * (surfaceOffset + length) * sign,
-                center.y + axis.y * (surfaceOffset + length) * sign,
-                center.z + axis.z * (surfaceOffset + length) * sign
+                center.x + axis.x * length * sign,
+                center.y + axis.y * length * sign,
+                center.z + axis.z * length * sign
             )
             val signedRotation = if (sign < 0f) reverseAxisRotation(axis, rotation) else rotation
             CylinderNode(
@@ -927,6 +978,7 @@ private fun SceneScope.TransformGizmo(
                     isTouchable = true
                     isHittable = true
                     setPriority(7)
+                    materialInstance.setDepthCulling(false)
                 }
             )
             if (tool == "MOVE") {
@@ -941,6 +993,7 @@ private fun SceneScope.TransformGizmo(
                         isTouchable = true
                         isHittable = true
                         setPriority(7)
+                        materialInstance.setDepthCulling(false)
                     }
                 )
             } else {
@@ -959,12 +1012,6 @@ private fun SceneScope.TransformGizmo(
         }
     }
 }
-
-private fun axisHalfExtent(part: Part, axis: GizmoAxis): Float = when (axis) {
-    GizmoAxis.X -> part.size.x / 2f
-    GizmoAxis.Y -> part.size.y / 2f
-    GizmoAxis.Z -> part.size.z / 2f
-}.coerceAtLeast(0f)
 
 private fun reverseAxisRotation(axis: GizmoAxis, rotation: Rotation): Rotation = when (axis) {
     GizmoAxis.X -> Rotation(rotation.x, rotation.y, 90f)
@@ -1026,12 +1073,15 @@ private fun SceneScope.DecalNode(
 @Composable
 private fun SceneScope.SelectionNode(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
-    part: Part
+    part: Part,
+    colorHex: String = "#00B3FF",
+    alpha: Float = 1f,
+    alwaysOnTop: Boolean = false
 ) {
     val material = remember {
         materialLoader.createUnlitColorInstance(
-            dev.romainguy.kotlin.math.Float4(0.0f, 0.7f, 1.0f, 1.0f)
-        )
+            dev.romainguy.kotlin.math.Float4(colorR(colorHex), colorG(colorHex), colorB(colorHex), alpha)
+        ).apply { if (alwaysOnTop) setDepthCulling(false) }
     }
     val h = 0.53f
     val corners = listOf(

@@ -51,6 +51,7 @@ data class StudioNode(
         const val CLASS_WEDGE_PART = "WedgePart"
         const val CLASS_CORNER_WEDGE_PART = "CornerWedgePart"
         const val CLASS_TRUSS_PART = "TrussPart"
+        const val CLASS_MESH_PART = "MeshPart"
         const val CLASS_BALL_PART = "BallPart"
         const val CLASS_SCREEN_GUI = "ScreenGui"
         const val CLASS_FRAME = "Frame"
@@ -76,6 +77,8 @@ data class StudioNode(
         const val CLASS_UI_LIST_LAYOUT = "UIListLayout"
         const val CLASS_UI_CORNER = "UICorner"
         const val CLASS_UI_STROKE = "UIStroke"
+        const val CLASS_UI_GRADIENT = "UIGradient"
+        const val CLASS_HIGHLIGHT = "Highlight"
 
         // Service class names
         const val CLASS_WORKSPACE = "Workspace"
@@ -122,7 +125,8 @@ data class StudioNode(
 
         val GUI_DECORATOR_CLASS_NAMES: Set<String> = setOf(
             CLASS_UI_CORNER,
-            CLASS_UI_STROKE
+            CLASS_UI_STROKE,
+            CLASS_UI_GRADIENT
         )
 
         val EFFECT_CLASS_NAMES: Set<String> = setOf(

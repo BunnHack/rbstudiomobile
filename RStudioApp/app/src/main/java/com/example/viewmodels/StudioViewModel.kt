@@ -509,6 +509,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     shape = Part.SHAPE_TRUSS,
                     trussStyle = styleByPartId[part.id]?.coerceIn(0, 2) ?: Part.TRUSS_STYLE_ALTERNATING_SUPPORTS
                 )
+                StudioNode.CLASS_MESH_PART -> part.copy(shape = Part.SHAPE_MESH)
                 else -> part
             }
         }
@@ -654,6 +655,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "Texture" to "",
                 "Transparency" to "0:0:0; 1:1:0"
             )
+            StudioNode.CLASS_HIGHLIGHT -> mapOf(
+                "Adornee" to "",
+                "DepthMode" to "AlwaysOnTop",
+                "Enabled" to "true",
+                "FillColor" to "#FF0000",
+                "FillTransparency" to "0.5",
+                "OutlineColor" to "#FFFFFF",
+                "OutlineTransparency" to "0.0"
+            )
             else -> emptyMap()
         }
         return identity
@@ -670,6 +680,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         StudioNode.CLASS_TRAIL,
         StudioNode.CLASS_BEAM,
         StudioNode.CLASS_PARTICLE_EMITTER -> selected?.id ?: null
+        StudioNode.CLASS_HIGHLIGHT -> selected?.id ?: StudioNode.CLASS_WORKSPACE
         StudioNode.CLASS_SKY -> StudioNode.CLASS_LIGHTING
         StudioNode.CLASS_SURFACE_GUI -> selected?.id ?: null
         else -> insertionParentId(selected)
@@ -710,6 +721,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "SizingMode" to "0",
                 "ZIndexBehavior" to "0",
                 "ZOffset" to "0.0"
+            )
+            return identity
+        }
+
+        if (className == StudioNode.CLASS_UI_GRADIENT) {
+            identity += mapOf(
+                "Color" to "0:#FFFFFF:0; 1:#FFFFFF:0",
+                "Enabled" to "true",
+                "Offset" to "x=0.0, y=0.0",
+                "Rotation" to "0.0",
+                "Transparency" to "0:0:0; 1:0:0"
             )
             return identity
         }
@@ -866,6 +888,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     StudioNode.CLASS_WEDGE_PART -> Part.SHAPE_WEDGE
                     StudioNode.CLASS_CORNER_WEDGE_PART -> Part.SHAPE_CORNER_WEDGE
                     StudioNode.CLASS_TRUSS_PART -> Part.SHAPE_TRUSS
+                    StudioNode.CLASS_MESH_PART -> Part.SHAPE_MESH
                     StudioNode.CLASS_SPAWN_LOCATION -> Part.SHAPE_SPAWN_LOCATION
                     else -> Part.SHAPE_BLOCK
                 }
@@ -1105,6 +1128,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 Part.SHAPE_WEDGE -> StudioNode.CLASS_WEDGE_PART
                 Part.SHAPE_CORNER_WEDGE -> StudioNode.CLASS_CORNER_WEDGE_PART
                 Part.SHAPE_TRUSS -> StudioNode.CLASS_TRUSS_PART
+                Part.SHAPE_MESH -> StudioNode.CLASS_MESH_PART
             Part.SHAPE_SPAWN_LOCATION -> StudioNode.CLASS_SPAWN_LOCATION
             else -> StudioNode.CLASS_PART
         }
@@ -1142,7 +1166,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             StudioNode.CLASS_SKY, StudioNode.CLASS_CLICK_DETECTOR,
             StudioNode.CLASS_TRAIL, StudioNode.CLASS_BEAM, StudioNode.CLASS_PARTICLE_EMITTER,
             StudioNode.CLASS_SURFACE_GUI, StudioNode.CLASS_UI_LIST_LAYOUT,
-            StudioNode.CLASS_UI_CORNER, StudioNode.CLASS_UI_STROKE,
+            StudioNode.CLASS_UI_CORNER, StudioNode.CLASS_UI_STROKE, StudioNode.CLASS_UI_GRADIENT,
+            StudioNode.CLASS_HIGHLIGHT,
             "ProximityPrompt", "Dialog" -> {
                 // Non-renderable 3D interface — create as node without part
                 val selected = _selectedNode.value
@@ -1194,6 +1219,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     StudioNode.CLASS_TRAIL,
                     StudioNode.CLASS_BEAM,
                     StudioNode.CLASS_PARTICLE_EMITTER -> defaultObjectProperties(className, parentId)
+                    StudioNode.CLASS_HIGHLIGHT -> defaultObjectProperties(className, parentId)
                     StudioNode.CLASS_SKY,
                     StudioNode.CLASS_CLICK_DETECTOR -> defaultObjectProperties(className, parentId)
                     StudioNode.CLASS_SURFACE_GUI -> defaultGuiProperties(className, parentId)
@@ -1225,6 +1251,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         "Transparency" to "0.0",
                         "ParentId" to (parentId ?: StudioNode.CLASS_STARTER_GUI)
                     )
+                    StudioNode.CLASS_UI_GRADIENT -> defaultGuiProperties(className, parentId)
                     else -> mapOf(
                         "ClassName" to className,
                         "Name" to className,
