@@ -93,4 +93,22 @@ class StudioNodeGraphTest {
         assertEquals(StudioNode.CLASS_TRUSS_PART, nodes.getValue("truss").className)
         assertEquals(StudioNode.CLASS_CORNER_WEDGE_PART, nodes.getValue("corner").className)
     }
+
+    @Test
+    fun subtreeTraversalHandlesLargeHierarchyAndCycles() {
+        val nodes = buildList {
+            add(StudioNode("model", "Model", StudioNode.CLASS_MODEL))
+            repeat(600) { index ->
+                add(StudioNode("node-$index", "Node$index", StudioNode.CLASS_FOLDER, if (index == 0) "model" else "node-${index - 1}"))
+            }
+            add(StudioNode("cycle-a", "CycleA", StudioNode.CLASS_FOLDER, "cycle-b"))
+            add(StudioNode("cycle-b", "CycleB", StudioNode.CLASS_FOLDER, "cycle-a"))
+        }
+
+        val descendants = StudioNodeGraph.collectSubtreeIds(nodes, "model")
+        val cycle = StudioNodeGraph.collectSubtreeIds(nodes, "cycle-a")
+
+        assertEquals(601, descendants.size)
+        assertEquals(setOf("cycle-a", "cycle-b"), cycle)
+    }
 }

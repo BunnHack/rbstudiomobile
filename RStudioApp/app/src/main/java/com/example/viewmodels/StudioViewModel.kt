@@ -1022,6 +1022,28 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    fun updatePartsBatch(updated: List<Part>) {
+        if (updated.isEmpty()) return
+        val replacements = updated.associateBy { it.id }
+        val list = _parts.value.map { replacements[it.id] ?: it }
+        setPartsAndSyncNodes(list)
+        _selectedPart.value = _selectedPart.value?.let { replacements[it.id] ?: it }
+        _selectedNode.value = StudioNodeGraph.resolveNode(_selectedNode.value, _nodes.value, list)
+        if (!_isPlaying.value) scheduleHistoryCommit(list)
+    }
+
+    fun selectedTransformParts(): List<Part> {
+        _selectedPart.value?.let { return listOf(it) }
+        val selected = _selectedNode.value ?: return emptyList()
+        if (selected.className != StudioNode.CLASS_MODEL) return emptyList()
+        val descendantIds = StudioNodeGraph.collectSubtreeIds(_nodes.value, selected.id)
+        val partIds = _nodes.value.asSequence()
+            .filter { it.id in descendantIds }
+            .mapNotNull { it.part?.id }
+            .toSet()
+        return _parts.value.filter { it.id in partIds }
+    }
+
     private var historyCommitJob: kotlinx.coroutines.Job? = null
 
     /**
@@ -1415,6 +1437,35 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun insertToolboxAsset(asset: ToolboxAsset) {
+        if (asset.assetTypeId == ToolboxAssetTypes.Meshes.assetTypeId) {
+            val selected = _selectedNode.value
+            val parentId = insertionParentId(selected)
+            val pivot = (selected?.part?.currentPosition ?: Vector3(0f, 4f, 0f)) + Vector3(3f, 0f, 0f)
+            val part = Part(
+                id = UUID.randomUUID().toString(),
+                name = asset.name.ifBlank { "MeshPart" },
+                shape = Part.SHAPE_MESH,
+                position = pivot,
+                currentPosition = pivot,
+                size = Vector3(2f, 2f, 2f),
+                initialSize = Vector3(2f, 2f, 2f),
+                meshId = "rbxassetid://${asset.assetId}",
+                sourceAssetId = asset.assetId,
+                parentId = parentId
+            )
+            val node = StudioNode(
+                id = UUID.randomUUID().toString(),
+                name = part.name,
+                className = StudioNode.CLASS_MESH_PART,
+                parentId = parentId,
+                part = part
+            )
+            commitHistory(_parts.value + part, _nodes.value + node)
+            _selectedPart.value = part
+            _selectedNode.value = node
+            logSystem("● Inserted MeshPart '${part.name}' from Toolbox.")
+            return
+        }
         if (asset.assetTypeId != null && asset.assetTypeId != ToolboxAssetTypes.Models.assetTypeId) {
             val type = asset.assetTypeName.ifBlank { "asset type ${asset.assetTypeId}" }
             logSystem("Toolbox: '$type' items can be browsed, but only Model assets can be inserted right now.")
@@ -1433,11 +1484,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     val instances = com.example.parser.RobloxParser.parseRobloxFile(data)
                     parseRobloxImport(instances)
                 }
-                val preparedImport = prepareRobloxImport(
-                    parsed = parsedImport,
-                    sourceAssetId = asset.assetId,
-                    offsetToSelection = true
-                )
+                val selectedNodeSnapshot = _selectedNode.value
+                val selectedPartSnapshot = _selectedPart.value
+                val preparedImport = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                    prepareRobloxImport(
+                        parsed = parsedImport,
+                        sourceAssetId = asset.assetId,
+                        offsetToSelection = true,
+                        selectedNode = selectedNodeSnapshot,
+                        selectedPart = selectedPartSnapshot
+                    )
+                }
                 if (preparedImport.parts.isEmpty() && preparedImport.nodes.isEmpty()) {
                     logSystem("● Toolbox asset '${asset.name}' downloaded, but it has no supported instances.")
                     return@launch
@@ -1480,16 +1537,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private fun prepareRobloxImport(
         parsed: ParsedRobloxImport,
         sourceAssetId: Long? = null,
-        offsetToSelection: Boolean
+        offsetToSelection: Boolean,
+        selectedNode: StudioNode? = _selectedNode.value,
+        selectedPart: Part? = _selectedPart.value
     ): PreparedRobloxImport {
+        val parsedNodeIds = parsed.nodes.asSequence().map { it.id }.toHashSet()
         val idMap = parsed.nodes.associate { node ->
             node.id to if (node.className in StudioNode.SERVICE_CLASS_NAMES) node.className else UUID.randomUUID().toString()
         } +
-            parsed.parts.filter { part -> parsed.nodes.none { it.id == part.id } }
+            parsed.parts.filter { part -> part.id !in parsedNodeIds }
                 .associate { it.id to UUID.randomUUID().toString() }
-        val targetParentId = insertionParentId(_selectedNode.value)
+        val targetParentId = insertionParentId(selectedNode)
         val offset = if (offsetToSelection && parsed.parts.isNotEmpty()) {
-            val targetCenter = (_selectedPart.value?.currentPosition ?: Vector3.Zero) + Vector3(0f, 6f, 0f)
+            val targetCenter = (selectedPart?.currentPosition ?: Vector3.Zero) + Vector3(0f, 6f, 0f)
             targetCenter - partsBoundsCenter(parsed.parts)
         } else {
             Vector3.Zero
@@ -1567,10 +1627,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     private fun addPreparedRobloxImport(prepared: PreparedRobloxImport) {
-        _nodes.value = normalizeStoredNodes(_nodes.value + prepared.nodes)
-        if (prepared.parts.isNotEmpty()) {
-            commitHistory(_parts.value + prepared.parts)
-        }
+        val combinedNodes = normalizeStoredNodes(_nodes.value + prepared.nodes)
+        val combinedParts = _parts.value + prepared.parts
+        if (prepared.parts.isNotEmpty()) commitHistory(combinedParts, combinedNodes)
+        else syncNodesWithParts(combinedParts, combinedNodes)
     }
 
     private fun partsBoundsCenter(parts: List<Part>): Vector3 {
@@ -1673,17 +1733,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun importRobloxFile(data: ByteArray, fileName: String) {
+        viewModelScope.launch {
         try {
-            val instances = com.example.parser.RobloxParser.parseRobloxFile(data)
-            val parsedImport = parseRobloxImport(instances)
-            val preparedImport = prepareRobloxImport(
-                parsed = parsedImport,
-                sourceAssetId = null,
-                offsetToSelection = false
-            )
+            val selectedNodeSnapshot = _selectedNode.value
+            val selectedPartSnapshot = _selectedPart.value
+            val preparedImport = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                val instances = com.example.parser.RobloxParser.parseRobloxFile(data)
+                val parsedImport = parseRobloxImport(instances)
+                prepareRobloxImport(
+                    parsed = parsedImport,
+                    sourceAssetId = null,
+                    offsetToSelection = false,
+                    selectedNode = selectedNodeSnapshot,
+                    selectedPart = selectedPartSnapshot
+                )
+            }
             if (preparedImport.parts.isEmpty() && preparedImport.nodes.isEmpty()) {
                 logSystem("● No supported instances found in '$fileName'.")
-                return
+                return@launch
             }
             addPreparedRobloxImport(preparedImport)
             val focusPart = preparedImport.parts.firstOrNull { !it.name.equals("Baseplate", ignoreCase = true) }
@@ -1696,6 +1763,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             logSystem("● Imported $fileName: ${preparedImport.parts.size} parts, ${preparedImport.nodes.size} nodes added ($previewNames$suffix).")
         } catch (e: Exception) {
             logSystem("❌ Failed to import '$fileName': ${e.message}")
+        }
         }
     }
 

@@ -75,6 +75,7 @@ import com.example.ui.properties.GridSwitchRow
 import com.example.ui.properties.GridSliderRow
 import com.example.ui.properties.AccentColor
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -175,13 +176,25 @@ fun StudioScreen(viewModel: StudioViewModel) {
 
     // File picker for importing Roblox .rbxm/.rbxl/.rbxmx/.rbxlx files.
     val context = androidx.compose.ui.platform.LocalContext.current
+    val importScope = rememberCoroutineScope()
     val robloxFileLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
+            importScope.launch {
             runCatching {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    val bytes = input.readBytes()
+                val loaded = withContext(Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        val output = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(64 * 1024)
+                        var total = 0
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            total += count
+                            require(total <= 64 * 1024 * 1024) { "File exceeds the 64 MB mobile import limit." }
+                            output.write(buffer, 0, count)
+                        }
                     // Extract a readable filename from the URI (fallback to "imported")
                     val fileName = runCatching {
                         context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
@@ -189,9 +202,12 @@ fun StudioScreen(viewModel: StudioViewModel) {
                             if (nameIdx >= 0 && cursor.moveToFirst()) cursor.getString(nameIdx) else null
                         }
                     }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "imported"
-                    viewModel.importRobloxFile(bytes, fileName)
+                        output.toByteArray() to fileName
+                    }
                 }
+                loaded?.let { (bytes, fileName) -> viewModel.importRobloxFile(bytes, fileName) }
             }.onFailure { viewModel.logSystem("❌ Failed to read file: ${it.message}") }
+            }
         }
     }
     val openRobloxFilePicker = {

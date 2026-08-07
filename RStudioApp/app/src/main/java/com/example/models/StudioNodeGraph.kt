@@ -43,16 +43,14 @@ object StudioNodeGraph {
     }
 
     fun collectSubtreeIds(nodes: List<StudioNode>, rootId: String): Set<String> {
-        val ids = linkedSetOf(rootId)
-        var changed = true
-        while (changed) {
-            changed = false
-            nodes.forEach { node ->
-                if (node.parentId in ids && node.id !in ids) {
-                    ids += node.id
-                    changed = true
-                }
-            }
+        val children = nodes.groupBy { it.parentId }
+        val ids = linkedSetOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(rootId)
+        while (queue.isNotEmpty()) {
+            val id = queue.removeFirst()
+            if (!ids.add(id)) continue
+            children[id].orEmpty().forEach { queue.add(it.id) }
         }
         return ids
     }

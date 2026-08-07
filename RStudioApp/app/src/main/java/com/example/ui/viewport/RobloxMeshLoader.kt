@@ -8,6 +8,9 @@ import io.github.sceneview.geometries.Geometry
 import io.github.sceneview.math.Direction
 import io.github.sceneview.math.Position
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,6 +24,8 @@ class RobloxMeshLoader(
 ) {
     private val cache = mutableMapOf<String, Geometry>()
     private val missing = mutableSetOf<String>()
+    private val inFlight = mutableMapOf<String, CompletableDeferred<ParsedRobloxMesh?>>()
+    private val lock = Any()
 
     @Volatile
     var roblosecurityCookie: String = ""
@@ -30,12 +35,32 @@ class RobloxMeshLoader(
             .find(meshUri.trim())?.groupValues?.getOrNull(1) ?: return null
         cache[assetId]?.let { return it }
         if (assetId in missing) return null
-        return runCatching {
-            val bytes = withContext(Dispatchers.IO) { download(assetId) }
-            FileMeshParser.parse(bytes).toGeometry(engine)
-        }.onSuccess { cache[assetId] = it }
-            .onFailure { missing += assetId }
-            .getOrNull()
+        val deferred: CompletableDeferred<ParsedRobloxMesh?>
+        val owner: Boolean
+        synchronized(lock) {
+            val existing = inFlight[assetId]
+            if (existing != null) {
+                deferred = existing
+                owner = false
+            } else {
+                deferred = CompletableDeferred()
+                inFlight[assetId] = deferred
+                owner = true
+            }
+        }
+        if (owner) {
+            val parsed = runCatching {
+                LOAD_LIMIT.withPermit {
+                    withContext(Dispatchers.IO) { download(assetId) }
+                        .let { bytes -> withContext(Dispatchers.Default) { FileMeshParser.parse(bytes) } }
+                }
+            }.getOrNull()
+            if (parsed == null) missing += assetId
+            deferred.complete(parsed)
+            synchronized(lock) { inFlight.remove(assetId) }
+        }
+        val parsed = deferred.await() ?: return null
+        return parsed.toGeometry(engine).also { cache[assetId] = it }
     }
 
     private fun download(assetId: String): ByteArray {
@@ -58,6 +83,7 @@ class RobloxMeshLoader(
 
     companion object {
         private const val MAX_MESH_BYTES = 128 * 1024 * 1024
+        private val LOAD_LIMIT = Semaphore(2)
     }
 }
 
@@ -93,8 +119,8 @@ internal data class ParsedRobloxMesh(
 }
 
 internal object FileMeshParser {
-    private const val MAX_VERTICES = 1_000_000
-    private const val MAX_FACES = 2_000_000
+    private const val MAX_VERTICES = 250_000
+    private const val MAX_FACES = 500_000
 
     fun parse(bytes: ByteArray): ParsedRobloxMesh {
         val newline = bytes.indexOf('\n'.code.toByte()).takeIf { it in 8..16 }

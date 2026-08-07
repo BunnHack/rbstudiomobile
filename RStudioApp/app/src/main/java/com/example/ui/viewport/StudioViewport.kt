@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import com.example.models.Part
+import com.example.models.StudioNodeGraph
 import com.example.viewmodels.StudioViewModel
 import com.google.android.filament.Texture
 import com.google.android.filament.LightManager
@@ -75,6 +76,7 @@ fun StudioViewport(
     val pitch by viewModel.cameraPitch.collectAsState()
     val zoom by viewModel.cameraZoom.collectAsState()
     val selectedPart by viewModel.selectedPart.collectAsState()
+    val selectedNode by viewModel.selectedNode.collectAsState()
     val activeTool by viewModel.activeTool.collectAsState()
     val nodes by viewModel.explorerNodes.collectAsState()
     val roblosecurityCookie by viewModel.roblosecurityCookie.collectAsState()
@@ -105,8 +107,7 @@ fun StudioViewport(
             ambientOcclusionOptions = ambientOcclusionOptions.apply { enabled = false }
             antiAliasing = View.AntiAliasing.FXAA
             multiSampleAntiAliasingOptions = View.MultiSampleAntiAliasingOptions().apply {
-                enabled = true
-                sampleCount = 4
+                enabled = false
             }
             dithering = View.Dithering.NONE
         }
@@ -131,12 +132,22 @@ fun StudioViewport(
         )
     }
     var gizmoDrag by remember { mutableStateOf<GizmoDragState?>(null) }
+    val transformParts = remember(selectedPart, selectedNode, nodes, parts) {
+        selectedPart?.let(::listOf) ?: if (selectedNode?.className == com.example.models.StudioNode.CLASS_MODEL) {
+            val descendants = StudioNodeGraph.collectSubtreeIds(nodes, selectedNode!!.id)
+            val partIds = nodes.asSequence().filter { it.id in descendants }.mapNotNull { it.part?.id }.toSet()
+            parts.filter { it.id in partIds }
+        } else emptyList()
+    }
+    val transformPivot = remember(transformParts) { transformBoundsCenter(transformParts) }
 
     val scope = rememberCoroutineScope()
     val textureLoader = remember(engine, context) { RobloxTextureLoader(engine, OkHttpClient(), context.assets) }
     val meshLoader = remember(engine) { RobloxMeshLoader(engine, OkHttpClient()) }
     val meshGeometries = remember { mutableStateMapOf<String, io.github.sceneview.geometries.Geometry>() }
     val meshTextures = remember { mutableStateMapOf<String, Texture>() }
+    val loadingMeshIds = remember { mutableStateMapOf<String, Boolean>() }
+    val loadingMeshTextureIds = remember { mutableStateMapOf<String, Boolean>() }
     var customSkybox by remember { mutableStateOf<Skybox?>(null) }
     // Loaded decal textures by "uri|repeat"; populated asynchronously.
     val decalTextures = remember { mutableStateMapOf<String, Texture>() }
@@ -147,17 +158,22 @@ fun StudioViewport(
     }
 
     parts.filter { it.shape == Part.SHAPE_MESH && it.meshId.isNotBlank() }.forEach { part ->
-        if (part.meshId !in meshGeometries) {
-            scope.launch { meshLoader.load(part.meshId)?.let { meshGeometries[part.meshId] = it } }
-        }
-        if (part.textureId.isNotBlank() && part.id !in meshTextures) {
+        if (part.meshId !in meshGeometries && loadingMeshIds.put(part.meshId, true) == null) {
             scope.launch {
-                textureLoader.load(
-                    textureUri = part.textureId,
-                    repeating = false,
-                    tint = RobloxTextureLoader.TintColor(colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex)),
-                    alpha = 1f - part.transparency
-                )?.let { meshTextures[part.id] = it }
+                try { meshLoader.load(part.meshId)?.let { meshGeometries[part.meshId] = it } }
+                finally { loadingMeshIds.remove(part.meshId) }
+            }
+        }
+        if (part.textureId.isNotBlank() && part.id !in meshTextures && loadingMeshTextureIds.put(part.id, true) == null) {
+            scope.launch {
+                try {
+                    textureLoader.load(
+                        textureUri = part.textureId,
+                        repeating = false,
+                        tint = RobloxTextureLoader.TintColor(colorR(part.colorHex), colorG(part.colorHex), colorB(part.colorHex)),
+                        alpha = 1f - part.transparency
+                    )?.let { meshTextures[part.id] = it }
+                } finally { loadingMeshTextureIds.remove(part.id) }
             }
         }
     }
@@ -222,9 +238,10 @@ fun StudioViewport(
                 .firstNotNullOfOrNull { it.node.name?.let(::parseGizmoHandle) }
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (handle != null && selectedPart != null) {
+                    if (handle != null && transformParts.isNotEmpty()) {
                         gizmoDrag = createGizmoDragState(
-                            part = selectedPart!!,
+                            parts = transformParts,
+                            pivot = transformPivot,
                             handle = handle,
                             event = event,
                             cameraNode = cameraNode,
@@ -237,14 +254,14 @@ fun StudioViewport(
                 }
                 MotionEvent.ACTION_MOVE -> {
                     gizmoDrag?.let { drag ->
-                        viewModel.updatePartProperty(drag.updatedPart(event))
+                        viewModel.updatePartsBatch(drag.updatedParts(event))
                         true
                     } ?: false
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     val drag = gizmoDrag
                     if (drag != null) {
-                        viewModel.updatePartProperty(drag.updatedPart(event))
+                        viewModel.updatePartsBatch(drag.updatedParts(event))
                         gizmoDrag = null
                         true
                     } else {
@@ -363,13 +380,36 @@ fun StudioViewport(
         }
 
         // Selection highlight: a transparent cyan cube slightly larger than the part.
-        selectedPart?.let { part ->
-            SelectionNode(materialLoader, part)
+        if (transformParts.isNotEmpty()) {
+            if (transformParts.size == 1) {
+                SelectionNode(materialLoader, transformParts.single())
+            } else {
+                ModelSelectionNode(materialLoader, transformParts, transformPivot)
+            }
             if (activeTool != "SELECT") {
-                TransformGizmo(materialLoader, part, activeTool)
+                TransformGizmo(materialLoader, transformPivot, activeTool)
             }
         }
     }
+}
+
+@Composable
+private fun SceneScope.ModelSelectionNode(
+    materialLoader: io.github.sceneview.loaders.MaterialLoader,
+    parts: List<Part>,
+    pivot: com.example.models.Vector3
+) {
+    val size = transformBoundsSize(parts)
+    SelectionNode(
+        materialLoader,
+        Part(
+            id = "model-selection",
+            name = "Model",
+            position = pivot,
+            currentPosition = pivot,
+            size = size
+        )
+    )
 }
 
 @Composable
@@ -802,7 +842,8 @@ private enum class GizmoAxis(val x: Float, val y: Float, val z: Float) {
 private data class GizmoHandle(val tool: String, val axis: GizmoAxis, val sign: Float = 1f)
 
 private data class GizmoDragState(
-    val part: Part,
+    val parts: List<Part>,
+    val pivot: com.example.models.Vector3,
     val handle: GizmoHandle,
     val startX: Float,
     val startY: Float,
@@ -810,41 +851,48 @@ private data class GizmoDragState(
     val screenAxisY: Float,
     val pixelsPerWorldUnit: Float
 ) {
-    fun updatedPart(event: MotionEvent): Part {
+    fun updatedParts(event: MotionEvent): List<Part> {
         val dx = event.x - startX
         val dy = event.y - startY
         val signedPixels = dx * screenAxisX + dy * screenAxisY
         val worldDelta = signedPixels / pixelsPerWorldUnit.coerceAtLeast(0.25f)
         val axis = handle.axis
         return when (handle.tool) {
-            "MOVE" -> {
-                val position = com.example.models.Vector3(
-                    part.position.x + axis.x * worldDelta * handle.sign,
-                    part.position.y + axis.y * worldDelta * handle.sign,
-                    part.position.z + axis.z * worldDelta * handle.sign
+            "MOVE" -> parts.map { part ->
+                val position = part.position + com.example.models.Vector3(
+                    axis.x * worldDelta * handle.sign,
+                    axis.y * worldDelta * handle.sign,
+                    axis.z * worldDelta * handle.sign
                 )
                 part.copy(position = position, currentPosition = position)
             }
-            "SCALE" -> part.copy(
-                size = com.example.models.Vector3(
-                    (part.size.x + axis.x * worldDelta).coerceAtLeast(0.05f),
-                    (part.size.y + axis.y * worldDelta).coerceAtLeast(0.05f),
-                    (part.size.z + axis.z * worldDelta).coerceAtLeast(0.05f)
-                )
-            )
+            "SCALE" -> {
+                val halfExtent = transformAxisHalfExtent(parts, pivot, axis).coerceAtLeast(0.05f)
+                val factor = (1f + worldDelta * handle.sign / halfExtent).coerceAtLeast(0.02f)
+                parts.map { part ->
+                    val offset = part.position - pivot
+                    val position = pivot + com.example.models.Vector3(
+                        if (axis == GizmoAxis.X) offset.x * factor else offset.x,
+                        if (axis == GizmoAxis.Y) offset.y * factor else offset.y,
+                        if (axis == GizmoAxis.Z) offset.z * factor else offset.z
+                    )
+                    val size = com.example.models.Vector3(
+                        if (axis == GizmoAxis.X) (part.size.x * factor).coerceAtLeast(0.05f) else part.size.x,
+                        if (axis == GizmoAxis.Y) (part.size.y * factor).coerceAtLeast(0.05f) else part.size.y,
+                        if (axis == GizmoAxis.Z) (part.size.z * factor).coerceAtLeast(0.05f) else part.size.z
+                    )
+                    part.copy(position = position, currentPosition = position, size = size)
+                }
+            }
             "ROTATE" -> {
                 val degrees = signedPixels * 0.65f
-                val rotation = com.example.models.Vector3(
-                    part.rotation.x + axis.x * degrees,
-                    part.rotation.y + axis.y * degrees,
-                    part.rotation.z + axis.z * degrees
-                )
-                part.copy(
-                    rotation = rotation,
-                    currentRotation = rotation
-                )
+                parts.map { part ->
+                    val position = pivot + rotateDirection(part.position - pivot, com.example.models.Vector3(axis.x * degrees, axis.y * degrees, axis.z * degrees))
+                    val rotation = part.rotation + com.example.models.Vector3(axis.x * degrees, axis.y * degrees, axis.z * degrees)
+                    part.copy(position = position, currentPosition = position, rotation = rotation, currentRotation = rotation)
+                }
             }
-            else -> part
+            else -> parts
         }
     }
 }
@@ -860,21 +908,22 @@ private fun parseGizmoHandle(name: String): GizmoHandle? {
 }
 
 private fun createGizmoDragState(
-    part: Part,
+    parts: List<Part>,
+    pivot: com.example.models.Vector3,
     handle: GizmoHandle,
     event: MotionEvent,
     cameraNode: io.github.sceneview.node.CameraNode,
     handleLength: Float
 ): GizmoDragState {
     val origin = io.github.sceneview.collision.Vector3(
-        part.position.x,
-        part.position.y,
-        part.position.z
+        pivot.x,
+        pivot.y,
+        pivot.z
     )
     val endpoint = io.github.sceneview.collision.Vector3(
-        part.position.x + handle.axis.x * handleLength * handle.sign,
-        part.position.y + handle.axis.y * handleLength * handle.sign,
-        part.position.z + handle.axis.z * handleLength * handle.sign
+        pivot.x + handle.axis.x * handleLength * handle.sign,
+        pivot.y + handle.axis.y * handleLength * handle.sign,
+        pivot.z + handle.axis.z * handleLength * handle.sign
     )
     @Suppress("DEPRECATION")
     val originScreen = cameraNode.worldToScreenPoint(origin)
@@ -884,7 +933,8 @@ private fun createGizmoDragState(
     val sy = endpointScreen.y - originScreen.y
     val screenLength = sqrt(sx * sx + sy * sy).coerceAtLeast(1f)
     return GizmoDragState(
-        part = part,
+        parts = parts,
+        pivot = pivot,
         handle = handle,
         startX = event.x,
         startY = event.y,
@@ -895,21 +945,21 @@ private fun createGizmoDragState(
 }
 
 private const val GIZMO_LENGTH = 4f
-private const val GIZMO_ROD_RADIUS = 0.07f
+private const val GIZMO_ROD_RADIUS = 0.1f
 private const val GIZMO_ENDPOINT_SIZE = 0.65f
 
 /** Visible Roblox-style world-axis transform handles for MOVE / SCALE / ROTATE. */
 @Composable
 private fun SceneScope.TransformGizmo(
     materialLoader: io.github.sceneview.loaders.MaterialLoader,
-    part: Part,
+    pivot: com.example.models.Vector3,
     tool: String
 ) {
     val red = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 0.12f, 0.12f, 1f)).apply { setDepthCulling(false) } }
     val green = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.2f, 1f, 0.25f, 1f)).apply { setDepthCulling(false) } }
     val blue = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(0.15f, 0.45f, 1f, 1f)).apply { setDepthCulling(false) } }
     val white = remember { materialLoader.createUnlitColorInstance(dev.romainguy.kotlin.math.Float4(1f, 1f, 1f, 1f)).apply { setDepthCulling(false) } }
-    val center = Position(part.currentPosition.x, part.currentPosition.y, part.currentPosition.z)
+    val center = Position(pivot.x, pivot.y, pivot.z)
     val length = GIZMO_LENGTH
     val rodRadius = GIZMO_ROD_RADIUS
     val endpointSize = GIZMO_ENDPOINT_SIZE
@@ -1018,6 +1068,56 @@ private fun reverseAxisRotation(axis: GizmoAxis, rotation: Rotation): Rotation =
     GizmoAxis.Y -> Rotation(180f, rotation.y, rotation.z)
     GizmoAxis.Z -> Rotation(-90f, rotation.y, rotation.z)
 }
+
+private fun transformBoundsCenter(parts: List<Part>): com.example.models.Vector3 {
+    if (parts.isEmpty()) return com.example.models.Vector3.Zero
+    var minX = Float.POSITIVE_INFINITY
+    var minY = Float.POSITIVE_INFINITY
+    var minZ = Float.POSITIVE_INFINITY
+    var maxX = Float.NEGATIVE_INFINITY
+    var maxY = Float.NEGATIVE_INFINITY
+    var maxZ = Float.NEGATIVE_INFINITY
+    parts.forEach { part ->
+        val half = part.size * 0.5f
+        minX = minOf(minX, part.currentPosition.x - half.x)
+        minY = minOf(minY, part.currentPosition.y - half.y)
+        minZ = minOf(minZ, part.currentPosition.z - half.z)
+        maxX = maxOf(maxX, part.currentPosition.x + half.x)
+        maxY = maxOf(maxY, part.currentPosition.y + half.y)
+        maxZ = maxOf(maxZ, part.currentPosition.z + half.z)
+    }
+    return com.example.models.Vector3((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, (minZ + maxZ) * 0.5f)
+}
+
+private fun transformBoundsSize(parts: List<Part>): com.example.models.Vector3 {
+    if (parts.isEmpty()) return com.example.models.Vector3.Zero
+    var minX = Float.POSITIVE_INFINITY
+    var minY = Float.POSITIVE_INFINITY
+    var minZ = Float.POSITIVE_INFINITY
+    var maxX = Float.NEGATIVE_INFINITY
+    var maxY = Float.NEGATIVE_INFINITY
+    var maxZ = Float.NEGATIVE_INFINITY
+    parts.forEach { part ->
+        val half = part.size * 0.5f
+        minX = minOf(minX, part.currentPosition.x - half.x)
+        minY = minOf(minY, part.currentPosition.y - half.y)
+        minZ = minOf(minZ, part.currentPosition.z - half.z)
+        maxX = maxOf(maxX, part.currentPosition.x + half.x)
+        maxY = maxOf(maxY, part.currentPosition.y + half.y)
+        maxZ = maxOf(maxZ, part.currentPosition.z + half.z)
+    }
+    return com.example.models.Vector3(maxX - minX, maxY - minY, maxZ - minZ)
+}
+
+private fun transformAxisHalfExtent(parts: List<Part>, pivot: com.example.models.Vector3, axis: GizmoAxis): Float =
+    parts.maxOfOrNull { part ->
+        val offset = part.position - pivot
+        when (axis) {
+            GizmoAxis.X -> kotlin.math.abs(offset.x) + part.size.x * 0.5f
+            GizmoAxis.Y -> kotlin.math.abs(offset.y) + part.size.y * 0.5f
+            GizmoAxis.Z -> kotlin.math.abs(offset.z) + part.size.z * 0.5f
+        }
+    } ?: 0f
 
 @Composable
 private fun SceneScope.DecalNode(

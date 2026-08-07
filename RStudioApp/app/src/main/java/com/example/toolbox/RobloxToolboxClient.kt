@@ -60,7 +60,22 @@ class RobloxToolboxClient(
         val request = builder.build()
 
         client.newCall(request).execute().use { response ->
-            val body = response.body?.bytes() ?: ByteArray(0)
+            val responseBody = response.body
+            val declaredLength = responseBody?.contentLength() ?: -1L
+            if (declaredLength > MAX_ASSET_BYTES) throw IOException("Asset is too large for mobile import (${declaredLength / 1_048_576} MB).")
+            val body = responseBody?.byteStream()?.use { input ->
+                val output = java.io.ByteArrayOutputStream(minOf(declaredLength.takeIf { it > 0 }?.toInt() ?: 8192, MAX_ASSET_BYTES))
+                val buffer = ByteArray(64 * 1024)
+                var total = 0
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    total += count
+                    if (total > MAX_ASSET_BYTES) throw IOException("Asset exceeds the ${MAX_ASSET_BYTES / 1_048_576} MB mobile import limit.")
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            } ?: ByteArray(0)
             if (!response.isSuccessful) {
                 val text = body.toString(Charsets.UTF_8).take(500)
                 if (response.code == 401) {
@@ -349,6 +364,7 @@ class RobloxToolboxClient(
     }
 
     private companion object {
+        const val MAX_ASSET_BYTES = 64 * 1024 * 1024
         private const val APIS_BASE = "https://apis.roblox.com"
         private const val THUMBNAILS_BASE = "https://thumbnails.roblox.com"
         private const val ASSET_DELIVERY_BASE = "https://assetdelivery.roblox.com"
