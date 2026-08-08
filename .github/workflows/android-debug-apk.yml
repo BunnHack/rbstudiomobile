@@ -36,7 +36,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Cache Gradle
-        uses: actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v4
         with:
           build-root-directory: RStudioApp
           cache-encryption-key: ${{ runner.os }}-gradle-android-${{ github.sha }}
