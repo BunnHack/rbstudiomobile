@@ -23,18 +23,9 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
-  signingConfigs {
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
-  }
-
   buildTypes {
     debug {
-      signingConfig = signingConfigs.getByName("debugConfig")
+      // Use AGP's built-in debug signing so local and CI builds do not require a checked-in keystore.
     }
   }
   compileOptions {
