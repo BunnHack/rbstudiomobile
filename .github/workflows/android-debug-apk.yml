@@ -37,10 +37,6 @@ jobs:
 
       - name: Cache Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          build-root-directory: RStudioApp
-          cache-encryption-key: ${{ runner.os }}-gradle-android-${{ github.sha }}
-          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       - name: Ensure Gradle wrapper is executable
         run: chmod +x ./gradlew
